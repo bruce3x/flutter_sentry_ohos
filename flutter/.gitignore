@@ -1,0 +1,13 @@
+.DS_Store
+.dart_tool/
+
+.packages
+.pub/
+.idea/
+*.iml
+
+build/
+.cxx/
+
+.vscode/launch.json
+temp

@@ -13,13 +13,20 @@ build/
 .cxx/
 .vscode/
 .fvm/
-.fvmrc
 
 .test_coverage.dart
-packages/**/coverage/*
+dart/coverage/*
+logging/coverage/*
+dio/coverage/*
+file/coverage/*
+flutter/coverage/*
+sqflite/coverage/*
+drift/coverage/*
+hive/coverage/*
+isar/coverage/*
 
 pubspec.lock
 Podfile.lock
 
 .gradle
-packages/flutter/.gradle
+flutter/.gradle

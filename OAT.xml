@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright (c) 2025 Huawei Device Co., Ltd.
+
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+
+          http://www.apache.org/licenses/LICENSE-2.0
+
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License.
+
+-->
+<configuration>
+<oatconfig>
+    <filefilterlist>
+        <filefilter name="copyrightPolicyFilter" desc="Filters for compatibility，license header policies">
+            <filteritem type="filename" name="buildEnv.sh" desc="项目工程构建脚本"/>
+            <filteritem type="filename" name="*.metadata" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filename" name="*.dart" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filename" name="*.yaml" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.xml" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.c" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.cpp" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.h" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.rs" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.swift" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.xcconfig" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.manifest" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.py" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.m" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.java" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.TAG" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.kt" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.pubignore" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.hive" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.lock" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.rb" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.toml" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.flutter-plugins" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.cs" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.ps1" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.supp" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.csproj" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.envelope" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.flutter-plugins-dependencies" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filename" name="CODEOWNERS" desc="仓库治理配置文件，不要求添加版权/许可头"/>
+            <filteritem type="filepath" name="example/ios/.*" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name="example/android/.*" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name="example/macos/.*" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name=".all-contributorsrc" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name=".pubignore" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filename" name="*.json5" desc="hvigor配置文件，DevEco Studio自动生成，不手动修改"/>
+            <filteritem type="filename" name="LICENSE" desc="版权文件，不添加版权头"/>
+			<filteritem type="filepath" name="flutter/sentry-native/external/libunwindstack-ndk/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/sentry-native/tests/fixtures/os_releases/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/example/ios/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/example/macos/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/microbenchmarks/ios/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/microbenchmarks/macos/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/sentry-native/scripts/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="min_version_test/ios/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/sentry-native/ndk/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="metrics/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="dart/PATENTS" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/sentry-native/tests/fuzzing-failures/.*" desc="源库文件，不需要添加版权头"/>
+			
+			
+        </filefilter>
+        <filefilter name="defaultPolicyFilter" desc="Filters for compatibility，license header policies">
+            <filteritem type="filename" name="buildEnv.sh" desc="项目工程构建脚本"/>
+            <filteritem type="filename" name="*.metadata" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filename" name="*.dart" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filename" name="*.yaml" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filename" name="CODEOWNERS" desc="仓库治理配置文件，不要求添加版权/许可头"/>
+			<filteritem type="filepath" name="flutter/ios/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/android/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/linux/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/macos/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/example/windows/.*" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name="flutter/example/ios/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/example/android/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/example/linux/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/example/macos/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/example/web/.*" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name="example/android/.*" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name="example/windows/.*" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name="example/macos/.*" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name=".all-contributorsrc" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filepath" name=".pubignore" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filename" name="*.json5" desc="hvigor配置文件，DevEco Studio自动生成，不手动修改"/>
+            <filteritem type="filename" name="LICENSE" desc="版权文件，不添加版权头"/>
+			<filteritem type="filename" name="*.c" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.h" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.xml" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.cpp" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.kt" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.kts" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.swift" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.m" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.java" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.rs" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.py" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.TAG" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.ps1" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.hive" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.toml" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.lock" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.api" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.cs" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.rb" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.pubignore" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/sentry-native/tests/fixtures/os_releases/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/microbenchmarks/ios/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/microbenchmarks/macos/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="min_version_test/ios/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/sentry-native/external/libunwindstack-ndk/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="metrics/fastlane/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.supp" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.flutter-plugins" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.envelope" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.csproj" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.flutter-plugins-dependencies" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/microbenchmarks/windows/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/sentry-native/tests/fuzzing-failures/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="metrics/.*" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="dart/PATENTS" desc="源库文件，不需要添加版权头"/>
+
+        </filefilter>
+        <filefilter name="binaryFileTypePolicyFilter" desc="Filters for binary file policies">
+            <filteritem type="filename" name="*.png" desc="png图片格式文件,用于展示示例"/>
+            <filteritem type="filename" name="*.webp" desc="webp图片格式文件,用于展示示例"/>
+            <filteritem type="filename" name="*.dart" desc="源库文件，不需要添加版权头"/>
+            <filteritem type="filename" name="*.jks" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.so" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.ico" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.jar" desc="jar依赖包文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.dmp" desc="dmp文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.keystore" desc="keystore文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.envelope" desc="envelope文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.rlib" desc="rlib文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.rmeta" desc="rmeta文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.har" desc="安装包文件，不需要添加版权头"/>
+			<filteritem type="filename" name="*.dll" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="flutter/sentry-native/tests/fuzzing-failures/.*" desc="test文件，用于展示示例"/>
+			<filteritem type="filename" name="*.json5" desc="hvigor配置文件，DevEco Studio自动生成，不手动修改"/>
+			<filteritem type="filepath" name="flutter/sentry-native/tests/fixtures/sentry_example" desc="源库文件，不需要添加版权头"/>
+			<filteritem type="filepath" name="link/LICENSE" desc="源库文件，不需要添加版权头"/>
+        </filefilter>
+    </filefilterlist>
+</oatconfig>
+</configuration>

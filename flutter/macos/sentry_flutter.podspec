@@ -1,0 +1,1 @@
+../ios/sentry_flutter.podspec
