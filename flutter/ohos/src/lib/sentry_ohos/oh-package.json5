@@ -1,0 +1,13 @@
+{
+  "name": "sentry_ohos",
+  "version": "1.0.0",
+  "description": "Please describe the basic information.",
+  "main": "Index.ets",
+  "author": "",
+  "license": "Apache-2.0",
+  "packageType": "Har",
+  "dependencies": {
+    "libreplay_encoder.so": "file:../replay_encoder",
+    "@pura/harmony-utils": "^1.3.8"
+  }
+}

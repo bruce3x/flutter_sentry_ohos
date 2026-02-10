@@ -1,0 +1,11 @@
+{
+  "module": {
+    "name": "sentry_ohos_test",
+    "type": "feature",
+    "deviceTypes": [
+      "phone"
+    ],
+    "deliveryWithInstall": true,
+    "installationFree": false
+  }
+}

@@ -8,18 +8,15 @@ targets:
     # See https://github.com/getsentry/sentry-dart/pull/2113 for more context
     skipValidation: true
     packages:
-      packages/dart:
-      packages/flutter:
-      packages/logging:
-      packages/dio:
-      packages/file:
-      packages/sqflite:
-      packages/hive:
-      packages/drift:
-      packages/isar:
-      packages/link:
-      packages/firebase_remote_config:
-      packages/supabase:
+      dart:
+      flutter:
+      logging:
+      dio:
+      file:
+      sqflite:
+      hive:
+      drift:
+      isar:
   - name: github
   - name: registry
     sdks:
@@ -32,7 +29,3 @@ targets:
       pub:sentry_drift:
       pub:sentry_hive:
       pub:sentry_isar:
-      pub:sentry_link:
-      pub:sentry_firebase_remote_config:
-      # TODO: after we published supabase we need to add it to the registry repo and then uncomment here
-      # pub:sentry_supabase:

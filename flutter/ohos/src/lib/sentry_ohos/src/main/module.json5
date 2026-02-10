@@ -1,0 +1,10 @@
+{
+  "module": {
+    "name": "sentry_ohos",
+    "type": "har",
+    "description": "$string:shared_desc",
+    "deviceTypes": [
+      "phone"
+    ]
+  }
+}
