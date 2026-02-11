@@ -453,21 +453,6 @@ void main() {
       expect(sut.measurements.isEmpty, true);
     });
 
-    test('localMetricsAggregator is set when option is enabled', () async {
-      fixture.hub.options.enableMetrics = true;
-      fixture.hub.options.enableSpanLocalMetricAggregation = true;
-      final sut = fixture.getSut();
-      expect(fixture.hub.options.enableSpanLocalMetricAggregation, true);
-      expect(sut.localMetricsAggregator, isNotNull);
-    });
-
-    test('localMetricsAggregator is null when option is disabled', () async {
-      fixture.hub.options.enableMetrics = false;
-      final sut = fixture.getSut();
-      expect(fixture.hub.options.enableSpanLocalMetricAggregation, false);
-      expect(sut.localMetricsAggregator, null);
-    });
-
     test('setMeasurement sets a measurement', () async {
       final sut = fixture.getSut();
       sut.setMeasurement("test", 1);
@@ -482,6 +467,16 @@ void main() {
       sut.setMeasurementFromChild("test", 5);
       expect(sut.measurements.containsKey("test"), true);
       expect(sut.measurements["test"]!.value, 1);
+    });
+
+    test('hint passed to hub', () async {
+      final hint = Hint();
+
+      final sut = fixture.getSut();
+
+      await sut.finish(hint: hint);
+
+      expect(fixture.hub.captureTransactionCalls.first.hint, hint);
     });
   });
 
@@ -502,6 +497,7 @@ void main() {
           SentryTracesSamplingDecision(
             true,
             sampleRate: 1.0,
+            sampleRand: 0.8,
           );
       final _context = SentryTransactionContext(
         'name',
@@ -524,9 +520,9 @@ void main() {
       expect(newBaggage.get('sentry-public_key'), 'public');
       expect(newBaggage.get('sentry-release'), 'release');
       expect(newBaggage.get('sentry-environment'), 'environment');
-      expect(newBaggage.get('sentry-user_segment'), 'segment');
       expect(newBaggage.get('sentry-transaction'), 'name');
       expect(newBaggage.get('sentry-sample_rate'), '1');
+      expect(newBaggage.getSampleRand(), 0.8);
       expect(newBaggage.get('sentry-sampled'), 'true');
     });
 
@@ -598,8 +594,6 @@ void main() {
       expect(context.publicKey, 'public');
       expect(context.release, 'release');
       expect(context.environment, 'environment');
-      // ignore: deprecated_member_use_from_same_package
-      expect(context.userSegment, 'segment');
       expect(context.transaction, 'name');
       expect(context.sampleRate, '1');
       expect(context.sampled, 'true');
@@ -616,7 +610,6 @@ class Fixture {
 
   final user = SentryUser(
     id: 'id',
-    segment: 'segment',
   );
 
   final hub = MockHub();

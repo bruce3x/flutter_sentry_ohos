@@ -1,0 +1,8 @@
+output:
+  dart:
+    path: lib/src/native/ets/binding.dart
+    structure: single_file
+
+log_level: all
+
+classes:

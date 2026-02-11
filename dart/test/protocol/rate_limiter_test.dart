@@ -1,12 +1,11 @@
 import 'package:collection/collection.dart';
 import 'package:sentry/sentry.dart';
 import 'package:sentry/src/client_reports/discard_reason.dart';
-import 'package:sentry/src/transport/data_category.dart';
-import 'package:test/test.dart';
-
-import 'package:sentry/src/transport/rate_limiter.dart';
-import 'package:sentry/src/sentry_tracer.dart';
 import 'package:sentry/src/sentry_envelope_header.dart';
+import 'package:sentry/src/sentry_tracer.dart';
+import 'package:sentry/src/transport/data_category.dart';
+import 'package:sentry/src/transport/rate_limiter.dart';
+import 'package:test/test.dart';
 
 import '../mocks/mock_client_report_recorder.dart';
 import '../mocks/mock_hub.dart';
@@ -248,27 +247,6 @@ void main() {
     expect(spanDiscardedEvent!.quantity, 3);
   });
 
-  test('dropping of metrics recorded', () {
-    final rateLimiter = fixture.getSut();
-
-    final metricsItem = SentryEnvelopeItem.fromMetrics({});
-    final eventEnvelope = SentryEnvelope(
-      SentryEnvelopeHeader.newEventId(),
-      [metricsItem],
-    );
-
-    rateLimiter.updateRetryAfterLimits(
-        '1:metric_bucket:key, 5:metric_bucket:organization', null, 1);
-
-    final result = rateLimiter.filter(eventEnvelope);
-    expect(result, isNull);
-
-    expect(fixture.mockRecorder.discardedEvents.first.category,
-        DataCategory.metricBucket);
-    expect(fixture.mockRecorder.discardedEvents.first.reason,
-        DiscardReason.rateLimitBackoff);
-  });
-
   group('apply rateLimit', () {
     test('error', () {
       final rateLimiter = fixture.getSut();
@@ -304,61 +282,41 @@ void main() {
       expect(result, isNull);
     });
 
-    test('metrics', () {
+    test('log', () {
       final rateLimiter = fixture.getSut();
       fixture.dateTimeToReturn = 0;
 
-      final metricsItem = SentryEnvelopeItem.fromMetrics({});
-      final envelope = SentryEnvelope(
-        SentryEnvelopeHeader.newEventId(),
-        [metricsItem],
+      final log = SentryLog(
+        timestamp: DateTime.now(),
+        traceId: SentryId.newId(),
+        level: SentryLogLevel.info,
+        body: 'test',
+        attributes: {
+          'test': SentryLogAttribute.string('test'),
+        },
       );
 
+      final sdkVersion = SdkVersion(name: 'test', version: 'test');
+      final envelope = SentryEnvelope.fromLogs([log], sdkVersion);
+
       rateLimiter.updateRetryAfterLimits(
-          '1:metric_bucket:key, 5:metric_bucket:organization', null, 1);
+          '1:log_item:key, 5:log_item:organization', null, 1);
 
       final result = rateLimiter.filter(envelope);
       expect(result, isNull);
     });
+  });
 
-    test('metrics with empty namespaces', () {
-      final rateLimiter = fixture.getSut();
-      fixture.dateTimeToReturn = 0;
-
-      final eventItem = SentryEnvelopeItem.fromEvent(SentryEvent());
-      final metricsItem = SentryEnvelopeItem.fromMetrics({});
-      final envelope = SentryEnvelope(
-        SentryEnvelopeHeader.newEventId(),
-        [eventItem, metricsItem],
-      );
-
-      rateLimiter.updateRetryAfterLimits(
-          '10:metric_bucket:key:quota_exceeded:', null, 1);
-
-      final result = rateLimiter.filter(envelope);
-      expect(result, isNotNull);
-      expect(result!.items.length, 1);
-      expect(result.items.first.header.type, 'event');
-    });
-
-    test('metrics with custom namespace', () {
-      final rateLimiter = fixture.getSut();
-      fixture.dateTimeToReturn = 0;
-
-      final eventItem = SentryEnvelopeItem.fromEvent(SentryEvent());
-      final metricsItem = SentryEnvelopeItem.fromMetrics({});
-      final envelope = SentryEnvelope(
-        SentryEnvelopeHeader.newEventId(),
-        [eventItem, metricsItem],
-      );
-
-      rateLimiter.updateRetryAfterLimits(
-          '10:metric_bucket:key:quota_exceeded:custom', null, 1);
-
-      final result = rateLimiter.filter(envelope);
-      expect(result, isNotNull);
-      expect(result!.items.length, 1);
-      expect(result.items.first.header.type, 'event');
+  group('$DataCategory', () {
+    test('fromItemType', () {
+      expect(DataCategory.fromItemType('event'), DataCategory.error);
+      expect(DataCategory.fromItemType('session'), DataCategory.session);
+      expect(DataCategory.fromItemType('attachment'), DataCategory.attachment);
+      expect(
+          DataCategory.fromItemType('transaction'), DataCategory.transaction);
+      expect(DataCategory.fromItemType('statsd'), DataCategory.metricBucket);
+      expect(DataCategory.fromItemType('log'), DataCategory.logItem);
+      expect(DataCategory.fromItemType('unknown'), DataCategory.unknown);
     });
   });
 }

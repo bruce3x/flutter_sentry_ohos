@@ -9,7 +9,7 @@ import 'sentry_native_binding.dart';
 import 'sentry_native_channel.dart';
 
 SentryNativeBinding createBinding(SentryFlutterOptions options) {
-  final platform = options.platformChecker.platform;
+  final platform = options.platform;
   if (Platform.operatingSystem == "ohos") {
     return SentryNativeOhos(options);
   }
@@ -23,3 +23,5 @@ SentryNativeBinding createBinding(SentryFlutterOptions options) {
     return SentryNativeChannel(options);
   }
 }
+
+

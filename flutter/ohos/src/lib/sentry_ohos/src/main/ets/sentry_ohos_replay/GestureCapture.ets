@@ -41,7 +41,6 @@ interface PointerState {
  */
 export class GestureCapture {
   private components: UIComponent[];
-  // private events: Array<UserActionEvent> = [];
   private events: ReplayEvent[] = [];
   private stateMap: Map<string, PointerState> = new Map(); // key = `${component.id}:${pointerId}`
   private handlers: Map<string, (e: BaseUIEvent) => void> = new Map(); // 保存 handler 以便解绑

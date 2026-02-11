@@ -26,47 +26,6 @@ import window from '@ohos.window';
 // - 优先使用 AVRecorder Surface 模式（需要 gfxSurface API）
 // - 备用方案：使用 MediaCodec Buffer 模式（基于华为开发者文档的最佳实践）
 // - 最终回退：ShapeVideoEncoder（JPEG/原生兜底）
-
-// MediaCodec Buffer 模式接口（基于 HarmonyOS MediaCodec API）
-interface MediaCodecFormat {
-  mime?: string;
-  width?: number;
-  height?: number;
-  colorFormat?: number;
-  frameRate?: number;
-  bitrate?: number;
-}
-
-interface MediaCodecBufferInfo {
-  offset?: number;
-  size?: number;
-  presentationTimeUs?: number;
-  flags?: number;
-}
-
-interface MediaCodec {
-  on(event: 'formatChange', callback: (format: MediaCodecFormat) => void): void;
-  on(event: 'newOutputData', callback: (buffer: Uint8Array, info: MediaCodecBufferInfo) => void): void;
-  prepare(): Promise<void>;
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  release(): Promise<void>;
-  getInputBuffer(index: number): Uint8Array | undefined;
-  getOutputBuffer(index: number): Uint8Array | undefined;
-  queueInputBuffer(index: number, offset: number, size: number, presentationTimeUs: number, flags: number): void;
-  dequeueInputBuffer(timeoutUs: number): number;
-  dequeueOutputBuffer(info: MediaCodecBufferInfo, timeoutUs: number): number;
-  releaseOutputBuffer(index: number, render: boolean): void;
-}
-
-interface AVMuxer {
-  addTrack(format: MediaCodecFormat): number;
-  start(): void;
-  writeSampleBuffer(trackIndex: number, data: Uint8Array, info: MediaCodecBufferInfo): void;
-  stop(): void;
-  release(): void;
-}
-
 // 本地最小 Surface 类型声明与 API（避免依赖 SDK 模块导入）
 interface SurfaceFrame { getCanvas(): drawing.Canvas }
 interface Surface { requestFrame(width: number, height: number): Promise<SurfaceFrame>; flushFrame(frame: SurfaceFrame): Promise<void> }
@@ -103,38 +62,16 @@ export class ArkTsVideoEncoder {
   }
 
   public init(context: common.BaseContext, width: number = 720, height: number = 1280, fps: number = 2): void {
-    // 优化：如果分辨率过高，进行降采样以减少视频体积（类似 ShapeVideoEncoder）
-    // 策略：优先降采样 0.25 倍；如果降采样后仍然超过 720p (宽度 > 720)，则强制缩放到 720 宽
-    let targetW = width;
-    let targetH = height;
-    
-    if (targetW > 720) {
-      targetW = targetW * 0.25;
-      targetH = targetH * 0.25;
-    }
-    
-    if (targetW > 720) {
-      const scale = 720 / targetW;
-      targetW = 720;
-      targetH = targetH * scale;
-    }
-
-    // Ensure 16-pixel alignment for encoder compatibility
-    this.width = Math.ceil(targetW / 16) * 16;
-    this.height = Math.ceil(targetH / 16) * 16;
-    this.fps = fps;
-
-    replayInfo('ArkTsVideoEncoder', `init: input=${width}x${height}, target=${targetW}x${targetH}, aligned=${this.width}x${this.height}`);
-
+    this.width = width; this.height = height; this.fps = fps;
     // 无论 setupRecorderPipeline 成功与否，都需要设置 delegate 的上下文
     // 因为 captureSnapshot() 会调用 delegate.captureSnapshot()，需要 ctx
-    this.delegate.init(context, this.width, this.height, fps);
+    this.delegate.init(context, width, height, fps);
     if (this.latestWindow) {
       this.delegate.setWindow(this.latestWindow);
     }
     this.setupPromise = this.setupRecorderPipeline(context).catch((err: Error) => {
-      replayWarn('ArkTsVideoEncoder', 'AVRecorder setup failed, fallback to ShapeVideoEncoder (native/JPEG). err=' + (err?.message ?? String(err)));
-      // 不启用 raw-only 模式，让 ShapeVideoEncoder 使用 JPEG 序列作为备用方案
+      replayWarn('ArkTsVideoEncoder', 'AVRecorder setup failed, fallback to ShapeVideoEncoder (JPEG sequence). err=' + (err?.message ?? String(err)));
+      // 不要启用 raw-only 模式，让 ShapeVideoEncoder 使用 JPEG 序列作为备用方案
     });
   }
 
@@ -155,13 +92,8 @@ export class ArkTsVideoEncoder {
       // 2. 确保分辨率对齐到编码器要求（16的倍数）
       const alignedWidth = Math.ceil(this.width / 16) * 16;
       const alignedHeight = Math.ceil(this.height / 16) * 16;
-      
-      // 码率计算优化：Replay 视频主要是低帧率静态内容，不需要高码率
-      // Android 默认：Low=40kbps, Medium=60kbps, High=200kbps
-      // 之前公式：width * height * fps * 0.1 -> 720p@2fps = ~184kbps (High quality)
-      // 但最小值之前设为 500kbps 太高了。
-      // 调整：min=40kbps, max=2Mbps, multiplier=0.05
-      const calculatedBitrate = Math.max(40_000, Math.min(2_000_000, alignedWidth * alignedHeight * this.fps * 0.05));
+      // 码率计算：根据分辨率和帧率，使用经验公式 bitrate = width * height * fps * 0.1
+      const calculatedBitrate = Math.max(500_000, Math.min(10_000_000, alignedWidth * alignedHeight * this.fps * 0.1));
 
       const config: media.AVRecorderConfig = {
         videoSourceType: media.VideoSourceType.VIDEO_SOURCE_TYPE_SURFACE_YUV,
@@ -228,17 +160,6 @@ export class ArkTsVideoEncoder {
         await this.delegate.appendFrame(pm, timestampMs);
         return;
       }
-      
-      // Scale if necessary to match encoder resolution
-      try {
-        const info = await pm.getImageInfo();
-        const w = info.size.width;
-        const h = info.size.height;
-        if (w !== this.width || h !== this.height) {
-          await pm.scale(this.width / w, this.height / h);
-        }
-      } catch (_) {}
-
       const frame = await this.inputSurface.requestFrame(this.width, this.height);
       const canvas: drawing.Canvas = frame.getCanvas();
       canvas.drawImage(pm, 0, 0);
@@ -254,6 +175,10 @@ export class ArkTsVideoEncoder {
 
   public async captureSnapshot(): Promise<image.PixelMap | undefined> {
     return await this.delegate.captureSnapshot();
+  }
+
+  public isSnapshotInFlight(): boolean {
+    return this.delegate.isSnapshotInFlight();
   }
 
   public async appendRawFrame(
@@ -278,16 +203,6 @@ export class ArkTsVideoEncoder {
         // 将 ArrayBuffer 转换为 PixelMap
         const pixelMap = await this.arrayBufferToPixelMap(buffer, width, height, stride);
         if (pixelMap) {
-          // Check and scale if needed
-          try {
-             const info = await pixelMap.getImageInfo();
-             const w = info.size.width;
-             const h = info.size.height;
-             if (w !== this.width || h !== this.height) {
-               await pixelMap.scale(this.width / w, this.height / h);
-             }
-          } catch (_) {}
-
           const frame = await this.inputSurface.requestFrame(this.width, this.height);
           const canvas: drawing.Canvas = frame.getCanvas();
           canvas.drawImage(pixelMap, 0, 0);
@@ -375,11 +290,15 @@ export class ArkTsVideoEncoder {
   }
 
   public getInitializedWidth(): number {
-    return this.width;
+    // 优先返回 delegate 的实际初始化尺寸，因为 ShapeVideoEncoder 使用原生编码器的实际尺寸
+    const delegateWidth = this.delegate.getInitializedWidth();
+    return delegateWidth > 0 ? delegateWidth : this.width;
   }
 
   public getInitializedHeight(): number {
-    return this.height;
+    // 优先返回 delegate 的实际初始化尺寸，因为 ShapeVideoEncoder 使用原生编码器的实际尺寸
+    const delegateHeight = this.delegate.getInitializedHeight();
+    return delegateHeight > 0 ? delegateHeight : this.height;
   }
 
   public async finalize(context: common.BaseContext): Promise<string | undefined> {

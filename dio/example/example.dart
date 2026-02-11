@@ -5,7 +5,7 @@ import 'package:sentry_dio/sentry_dio.dart';
 Future<void> main() async {
   // ATTENTION: Change the DSN below with your own to see the events in Sentry. Get one at sentry.io
   const dsn =
-      'https://e85b375ffb9f43cf8bdf9787768149e0@o447951.ingest.sentry.io/5428562';
+      'https://b6a6002ada31addaced3c0cc208e3df6@o4509908127842304.ingest.us.sentry.io/4509908136558592';
 
   await Sentry.init(
     (options) {
@@ -16,7 +16,6 @@ Future<void> main() async {
       options.sendDefaultPii = true;
 
       options.maxRequestBodySize = MaxRequestBodySize.small;
-      options.maxResponseBodySize = MaxResponseBodySize.small;
     },
     appRunner: runApp, // Init your App.
   );

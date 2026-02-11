@@ -4,17 +4,14 @@ import 'package:meta/meta.dart';
 
 import 'hint.dart';
 import 'hub.dart';
-import 'metrics/metric.dart';
-import 'metrics/metrics_aggregator.dart';
-import 'metrics/metrics_api.dart';
 import 'profiling.dart';
 import 'protocol.dart';
 import 'protocol/sentry_feedback.dart';
 import 'scope.dart';
+import 'sdk_lifecycle_hooks.dart';
 import 'sentry.dart';
 import 'sentry_client.dart';
 import 'sentry_options.dart';
-import 'sentry_user_feedback.dart';
 import 'tracing.dart';
 
 /// Hub adapter to make Integrations testable
@@ -26,11 +23,6 @@ class HubAdapter implements Hub {
   @override
   @internal
   SentryOptions get options => Sentry.currentHub.options;
-
-  @override
-  @internal
-  // ignore: deprecated_member_use_from_same_package
-  MetricsApi get metricsApi => Sentry.currentHub.metricsApi;
 
   factory HubAdapter() {
     return _instance;
@@ -62,12 +54,14 @@ class HubAdapter implements Hub {
     dynamic throwable, {
     dynamic stackTrace,
     Hint? hint,
+    SentryMessage? message,
     ScopeCallback? withScope,
   }) =>
       Sentry.captureException(
         throwable,
         stackTrace: stackTrace,
         hint: hint,
+        message: message,
         withScope: withScope,
       );
 
@@ -109,20 +103,16 @@ class HubAdapter implements Hub {
   Future<SentryId> captureTransaction(
     SentryTransaction transaction, {
     SentryTraceContextHeader? traceContext,
+    Hint? hint,
   }) =>
       Sentry.currentHub.captureTransaction(
         transaction,
         traceContext: traceContext,
+        hint: hint,
       );
 
   @override
   ISentrySpan? getSpan() => Sentry.currentHub.getSpan();
-
-  @override
-  // ignore: deprecated_member_use_from_same_package
-  Future<void> captureUserFeedback(SentryUserFeedback userFeedback) =>
-      // ignore: deprecated_member_use_from_same_package
-      Sentry.captureUserFeedback(userFeedback);
 
   @override
   ISentrySpan startTransactionWithContext(
@@ -173,6 +163,9 @@ class HubAdapter implements Hub {
       );
 
   @override
+  void generateNewTrace() => Sentry.currentHub.generateNewTrace();
+
+  @override
   void setSpanContext(
     dynamic throwable,
     ISentrySpan span,
@@ -194,14 +187,6 @@ class HubAdapter implements Hub {
   Scope get scope => Sentry.currentHub.scope;
 
   @override
-  Future<SentryId> captureMetrics(Map<int, Iterable<Metric>> metricsBuckets) =>
-      Sentry.currentHub.captureMetrics(metricsBuckets);
-
-  @override
-  MetricsAggregator? get metricsAggregator =>
-      Sentry.currentHub.metricsAggregator;
-
-  @override
   Future<SentryId> captureFeedback(
     SentryFeedback feedback, {
     Hint? hint,
@@ -212,4 +197,23 @@ class HubAdapter implements Hub {
         hint: hint,
         withScope: withScope,
       );
+
+  @override
+  FutureOr<void> captureLog(SentryLog log) => Sentry.currentHub.captureLog(log);
+
+  @override
+  Map<Type, List<Function>> get lifecycleCallbacks =>
+      Sentry.currentHub.lifecycleCallbacks;
+
+  @override
+  void registerSdkLifecycleCallback<T extends SdkLifecycleEvent>(
+      SdkLifecycleCallback<T> callback) {
+    Sentry.currentHub.registerSdkLifecycleCallback(callback);
+  }
+
+  @override
+  void removeSdkLifecycleCallback<T extends SdkLifecycleEvent>(
+      SdkLifecycleCallback<T> callback) {
+    Sentry.currentHub.removeSdkLifecycleCallback(callback);
+  }
 }

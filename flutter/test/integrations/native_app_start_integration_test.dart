@@ -1,7 +1,6 @@
-@TestOn('vm')
-library flutter_test;
+@TestOn('vm && !windows && !linux')
+library;
 
-import 'dart:async';
 import 'dart:core';
 import 'dart:ui';
 
@@ -21,6 +20,7 @@ void main() {
 
   setUp(() {
     fixture = Fixture();
+    fixture.options.tracesSampleRate = 1.0;
   });
 
   final _fakeFrameTiming = FrameTiming(
@@ -32,13 +32,21 @@ void main() {
       rasterFinishWallTime: 10);
 
   group('$NativeAppStartIntegration', () {
+    test('does not add integration if tracing is disabled', () {
+      fixture.options.tracesSampleRate = null;
+      fixture.options.tracesSampler = null;
+
+      fixture.callIntegration();
+
+      expect(fixture.options.sdk.integrations,
+          isNot(contains(NativeAppStartIntegration.integrationName)));
+    });
+
     test('adds integration', () async {
       fixture.callIntegration();
 
-      expect(
-          fixture.options.sdk.integrations
-              .contains('nativeAppStartIntegration'),
-          true);
+      expect(fixture.options.sdk.integrations,
+          contains(NativeAppStartIntegration.integrationName));
     });
 
     test('adds timingsCallback', () async {
@@ -55,6 +63,7 @@ void main() {
 
       expect(fixture.nativeAppStartHandler.calls, 1);
       expect(fixture.nativeAppStartHandler.appStartEnd, isNotNull);
+      expect(fixture.nativeAppStartHandler.context, isNotNull);
     });
 
     test('sets correct app start from timing', () async {
@@ -116,43 +125,25 @@ void main() {
       expect(fixture.frameCallbackHandler.timingsCallback, isNull);
     });
 
-    test('with disabled auto app start waits until appStartEnd is set',
-        () async {
-      fixture.options.autoAppStart = false;
-
+    test('sets root transaction context and ttd transaction ids', () async {
       fixture.callIntegration();
+
       final timingsCallback = fixture.frameCallbackHandler.timingsCallback!;
       timingsCallback([_fakeFrameTiming]);
 
-      expect(fixture.nativeAppStartHandler.calls, 0);
+      expect(fixture.nativeAppStartHandler.context, isNotNull);
 
-      final appStartEnd = DateTime.fromMicrosecondsSinceEpoch(50);
-      fixture.sut.appStartEnd = appStartEnd;
-
-      await Future<void>.delayed(Duration(milliseconds: 10));
-
-      expect(fixture.frameCallbackHandler.timingsCallback, isNull);
-      expect(fixture.nativeAppStartHandler.calls, 1);
-      expect(fixture.nativeAppStartHandler.appStartEnd, appStartEnd);
-    });
-
-    test('with disabled auto app start waits until timeout', () async {
-      fixture.options.autoAppStart = false;
-
-      fixture.callIntegration();
-      final timingsCallback = fixture.frameCallbackHandler.timingsCallback!;
-      await expectLater(
-        () => timingsCallback([_fakeFrameTiming]),
-        throwsA(isA<TimeoutException>()),
+      expect(fixture.nativeAppStartHandler.context?.name, 'root /');
+      expect(
+        fixture.nativeAppStartHandler.context?.operation,
+        // ignore: invalid_use_of_internal_member
+        SentrySpanOperations.uiLoad,
       );
 
-      expect(fixture.nativeAppStartHandler.calls, 0);
-
-      await Future<void>.delayed(Duration(seconds: 11));
-
-      expect(fixture.frameCallbackHandler.timingsCallback, isNull);
-      expect(fixture.nativeAppStartHandler.calls, 0);
-      expect(fixture.nativeAppStartHandler.appStartEnd, null);
+      expect(
+        fixture.options.timeToDisplayTracker.transactionId,
+        fixture.nativeAppStartHandler.context?.spanId,
+      );
     });
   });
 }
@@ -179,13 +170,16 @@ class Fixture {
 }
 
 class FakeNativeAppStartHandler implements NativeAppStartHandler {
+  SentryTransactionContext? context;
   DateTime? appStartEnd;
   var calls = 0;
 
   @override
   Future<void> call(Hub hub, SentryFlutterOptions options,
-      {required DateTime? appStartEnd}) async {
+      {required DateTime? appStartEnd,
+      required SentryTransactionContext context}) async {
     this.appStartEnd = appStartEnd;
+    this.context = context;
     calls += 1;
   }
 }

@@ -1,9 +1,11 @@
 import 'dart:async';
-import 'dart:io';
+
 import 'package:sentry/sentry.dart';
 import 'package:collection/collection.dart';
 // ignore: implementation_imports
 import 'package:sentry/src/event_processor/enricher/enricher_event_processor.dart';
+// ignore: implementation_imports
+import 'package:sentry/src/logs_enricher_integration.dart';
 import '../native/sentry_native_binding.dart';
 import '../sentry_flutter_options.dart';
 
@@ -41,7 +43,64 @@ class LoadContextsIntegration extends Integration<SentryFlutterOptions> {
       options.removeEventProcessor(enricherEventProcessor);
       options.addEventProcessor(enricherEventProcessor);
     }
+    if (options.enableLogs) {
+      final logsEnricherIntegration = options.integrations.firstWhereOrNull(
+        // ignore: invalid_use_of_internal_member
+        (element) => element is LogsEnricherIntegration,
+      );
+      if (logsEnricherIntegration != null) {
+        // Contexts from native cover the os.name and os.version attributes,
+        // so we can remove the logsEnricherIntegration.
+        options.removeIntegration(logsEnricherIntegration);
+      }
 
+      // ignore: invalid_use_of_internal_member
+      hub.registerSdkLifecycleCallback<OnBeforeCaptureLog>(
+        (event) async {
+          try {
+            final infos = await _native.loadContexts() ?? {};
+
+            final contextsMap = infos['contexts'] as Map?;
+            final contexts =
+                Contexts(); // We just need the the native contexts.
+            _mergeNativeWithLocalContexts(contextsMap, contexts);
+
+            if (contexts.operatingSystem?.name != null) {
+              event.log.attributes['os.name'] = SentryLogAttribute.string(
+                contexts.operatingSystem?.name ?? '',
+              );
+            }
+            if (contexts.operatingSystem?.version != null) {
+              event.log.attributes['os.version'] = SentryLogAttribute.string(
+                contexts.operatingSystem?.version ?? '',
+              );
+            }
+            if (contexts.device?.brand != null) {
+              event.log.attributes['device.brand'] = SentryLogAttribute.string(
+                contexts.device?.brand ?? '',
+              );
+            }
+            if (contexts.device?.model != null) {
+              event.log.attributes['device.model'] = SentryLogAttribute.string(
+                contexts.device?.model ?? '',
+              );
+            }
+            if (contexts.device?.family != null) {
+              event.log.attributes['device.family'] = SentryLogAttribute.string(
+                contexts.device?.family ?? '',
+              );
+            }
+          } catch (exception, stackTrace) {
+            options.log(
+              SentryLevel.error,
+              'LoadContextsIntegration failed to load contexts',
+              exception: exception,
+              stackTrace: stackTrace,
+            );
+          }
+        },
+      );
+    }
     options.sdk.addIntegration('loadContextsIntegration');
   }
 }
@@ -58,66 +117,7 @@ class _LoadContextsIntegrationEventProcessor implements EventProcessor {
     try {
       final infos = await _native.loadContexts() ?? {};
       final contextsMap = infos['contexts'] as Map?;
-      if (contextsMap != null && contextsMap.isNotEmpty) {
-        final contexts = Contexts.fromJson(
-          Map<String, dynamic>.from(contextsMap),
-        );
-        final eventContexts = event.contexts.clone();
-
-        contexts.forEach(
-          (key, dynamic value) {
-            if (value != null) {
-              final currentValue = eventContexts[key];
-              if (key == SentryRuntime.listType) {
-                contexts.runtimes.forEach(eventContexts.addRuntime);
-              } else if (currentValue == null) {
-                eventContexts[key] = value;
-              } else {
-                // merge the values
-                if (key == SentryOperatingSystem.type &&
-                    currentValue is SentryOperatingSystem &&
-                    value is SentryOperatingSystem) {
-                  // merge os context
-                  final osMap = {...value.toJson(), ...currentValue.toJson()};
-                  final os = SentryOperatingSystem.fromJson(osMap);
-                  eventContexts[key] = os;
-                } else if (key == SentryApp.type &&
-                    currentValue is SentryApp &&
-                    value is SentryApp) {
-                  // merge app context
-                  final appMap = {...value.toJson(), ...currentValue.toJson()};
-                  final app = SentryApp.fromJson(appMap);
-                  eventContexts[key] = app;
-                }
-              }
-            }
-          },
-        );
-        event = event.copyWith(contexts: eventContexts);
-        final nativeApp = contexts.app;
-        final result = nativeApp != null && Platform.operatingSystem == "ohos";
-        if (result) {
-          if (_options.release == null) {
-            final release = _composeRelease(
-              nativeApp.identifier,
-              nativeApp.name,
-              nativeApp.version,
-              nativeApp.build,
-            );
-            if (release != null && release.isNotEmpty) {
-              _options.release = release;
-              event = event.copyWith(release: release);
-              _options.logger(
-                SentryLevel.debug,
-                'LoadContextsIntegration: release set from native contexts: $release',
-              );
-            }
-          }
-          if (_options.dist == null && nativeApp.build?.isNotEmpty == true) {
-            _options.dist = nativeApp.build;
-          }
-        }
-      }
+      _mergeNativeWithLocalContexts(contextsMap, event.contexts);
 
       final tagsMap = infos['tags'] as Map?;
       if (tagsMap != null && tagsMap.isNotEmpty) {
@@ -129,7 +129,7 @@ class _LoadContextsIntegrationEventProcessor implements EventProcessor {
             tags[tag.key] = tag.value;
           }
         }
-        event = event.copyWith(tags: tags);
+        event.tags = tags;
       }
 
       final extraMap = infos['extra'] as Map?;
@@ -145,30 +145,23 @@ class _LoadContextsIntegrationEventProcessor implements EventProcessor {
         }
 
         // ignore: deprecated_member_use
-        event = event.copyWith(extra: extras);
+        event.extra = extras;
       }
 
       final userMap = infos['user'] as Map?;
       if (event.user == null && userMap != null && userMap.isNotEmpty) {
-        final userJson = Map<String, dynamic>.from(userMap);
-        if (_hasUserIdentifiers(userJson)) {
-          event = event.copyWith(user: SentryUser.fromJson(userJson));
-        } else {
-          _options.logger(
-            SentryLevel.debug,
-            'LoadContextsIntegration: ignoring native user context without identifiers',
-          );
-        }
+        final user = Map<String, dynamic>.from(userMap);
+        event.user = SentryUser.fromJson(user);
       }
 
       final distString = infos['dist'] as String?;
       if (event.dist == null && distString != null) {
-        event = event.copyWith(dist: distString);
+        event.dist = distString;
       }
 
       final environmentString = infos['environment'] as String?;
       if (event.environment == null && environmentString != null) {
-        event = event.copyWith(environment: environmentString);
+        event.environment = environmentString;
       }
 
       final fingerprintList = infos['fingerprint'] as List?;
@@ -181,12 +174,12 @@ class _LoadContextsIntegrationEventProcessor implements EventProcessor {
             eventFingerprints.add(fingerprint);
           }
         }
-        event = event.copyWith(fingerprint: eventFingerprints);
+        event.fingerprint = eventFingerprints;
       }
 
       final levelString = infos['level'] as String?;
       if (event.level == null && levelString != null) {
-        event = event.copyWith(level: SentryLevel.fromName(levelString));
+        event.level = SentryLevel.fromName(levelString);
       }
 
       final breadcrumbsList = infos['breadcrumbs'] as List?;
@@ -213,7 +206,7 @@ class _LoadContextsIntegrationEventProcessor implements EventProcessor {
           }
         }
 
-        event = event.copyWith(breadcrumbs: breadcrumbs);
+        event.breadcrumbs = breadcrumbs;
       }
 
       final integrationsList = infos['integrations'] as List?;
@@ -225,7 +218,7 @@ class _LoadContextsIntegrationEventProcessor implements EventProcessor {
           sdk.addIntegration(integration);
         }
 
-        event = event.copyWith(sdk: sdk);
+        event.sdk = sdk;
       }
 
       final packageMap = infos['package'] as Map?;
@@ -242,7 +235,7 @@ class _LoadContextsIntegrationEventProcessor implements EventProcessor {
           sdk.addPackage(name, version);
         }
 
-        event = event.copyWith(sdk: sdk);
+        event.sdk = sdk;
       }
 
       // captureEnvelope does not call the beforeSend callback, hence we need to
@@ -251,10 +244,10 @@ class _LoadContextsIntegrationEventProcessor implements EventProcessor {
         final tags = event.tags ?? {};
         tags['event.origin'] = 'flutter';
         tags['event.environment'] = 'dart';
-        event = event.copyWith(tags: tags);
+        event.tags = tags;
       }
     } catch (exception, stackTrace) {
-      _options.logger(
+      _options.log(
         SentryLevel.error,
         'loadContextsIntegration failed',
         exception: exception,
@@ -268,44 +261,41 @@ class _LoadContextsIntegrationEventProcessor implements EventProcessor {
   }
 }
 
-String? _composeRelease(
-  String? packageName,
-  String? appName,
-  String? version,
-  String? build,
-) {
-  String? base = packageName;
-  if (base == null || base.isEmpty) {
-    base = appName;
+void _mergeNativeWithLocalContexts(
+    Map<dynamic, dynamic>? contextsMap, Contexts contexts) {
+  if (contextsMap != null && contextsMap.isNotEmpty) {
+    final nativeContexts = Contexts.fromJson(
+      Map<String, dynamic>.from(contextsMap),
+    );
+
+    nativeContexts.forEach(
+      (key, dynamic value) {
+        if (value != null) {
+          final currentValue = contexts[key];
+          if (key == SentryRuntime.listType) {
+            nativeContexts.runtimes.forEach(contexts.addRuntime);
+          } else if (currentValue == null) {
+            contexts[key] = value;
+          } else {
+            // merge the values
+            if (key == SentryOperatingSystem.type &&
+                currentValue is SentryOperatingSystem &&
+                value is SentryOperatingSystem) {
+              // merge os context
+              final osMap = {...value.toJson(), ...currentValue.toJson()};
+              final os = SentryOperatingSystem.fromJson(osMap);
+              contexts[key] = os;
+            } else if (key == SentryApp.type &&
+                currentValue is SentryApp &&
+                value is SentryApp) {
+              // merge app context
+              final appMap = {...value.toJson(), ...currentValue.toJson()};
+              final app = SentryApp.fromJson(appMap);
+              contexts[key] = app;
+            }
+          }
+        }
+      },
+    );
   }
-
-  final buffer = StringBuffer();
-  if (base != null && base.isNotEmpty) {
-    buffer.write(base);
-  }
-
-  final hasBase = buffer.isNotEmpty;
-  if (version != null && version.isNotEmpty) {
-    if (hasBase) {
-      buffer.write('@');
-    }
-    buffer.write(version);
-  }
-
-  if (build != null && build.isNotEmpty) {
-    if (buffer.isNotEmpty) {
-      buffer.write('+');
-    }
-    buffer.write(build);
-  }
-
-  return buffer.isEmpty ? null : buffer.toString();
-}
-
-bool _hasUserIdentifiers(Map<String, dynamic> user) {
-  return user['id'] != null ||
-      user['username'] != null ||
-      user['email'] != null ||
-      user['ip_address'] != null ||
-      user['segment'] != null;
 }

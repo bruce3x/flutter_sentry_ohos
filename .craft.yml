@@ -17,6 +17,8 @@ targets:
       hive:
       drift:
       isar:
+      link:
+      firebase_remote_config:
   - name: github
   - name: registry
     sdks:
@@ -29,3 +31,5 @@ targets:
       pub:sentry_drift:
       pub:sentry_hive:
       pub:sentry_isar:
+      pub:sentry_link:
+      pub:sentry_firebase_remote_config:

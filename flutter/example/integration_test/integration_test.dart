@@ -20,6 +20,8 @@ void main() {
   const fakeDsn = 'https://abc@def.ingest.sentry.io/1234567';
 
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  IntegrationTestWidgetsFlutterBinding.instance.framePolicy =
+      LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
 
   tearDown(() async {
     await Sentry.close();
@@ -64,8 +66,10 @@ void main() {
     await setupSentryAndApp(tester);
 
     try {
-      throw const SentryException(
-          type: 'StarError', value: 'I have a bad feeling about this...');
+      throw SentryException(
+        type: 'StarError',
+        value: 'I have a bad feeling about this...',
+      );
     } catch (exception, stacktrace) {
       final sentryId =
           await Sentry.captureException(exception, stackTrace: stacktrace);
@@ -82,25 +86,9 @@ void main() {
     expect(sentryId != const SentryId.empty(), true);
   });
 
-  testWidgets('setup sentry and capture user feedback', (tester) async {
-    await setupSentryAndApp(tester);
-
-    // ignore: deprecated_member_use_from_same_package
-    // ignore: deprecated_member_use
-    final feedback = SentryUserFeedback(
-        eventId: SentryId.newId(),
-        name: 'fixture-name',
-        email: 'fixture@email.com',
-        comments: 'fixture-comments');
-    // ignore: deprecated_member_use
-    await Sentry.captureUserFeedback(feedback);
-  });
-
   testWidgets('setup sentry and capture feedback', (tester) async {
     await setupSentryAndApp(tester);
 
-    // ignore: deprecated_member_use_from_same_package
-    // ignore: deprecated_member_use
     final associatedEventId = await Sentry.captureMessage('Associated');
     final feedback = SentryFeedback(
       message: 'message',
@@ -163,6 +151,37 @@ void main() {
     final context = SentryTransactionContext('transaction', 'test');
     final transaction = Sentry.startTransactionWithContext(context);
     await transaction.finish();
+  });
+
+  testWidgets('setup sentry and test loading debug image', (tester) async {
+    await restoreFlutterOnErrorAfter(() async {
+      await setupSentryAndApp(tester);
+    });
+
+    // By default it should load all debug images
+    final allDebugImages = await SentryFlutter.native
+        ?.loadDebugImages(SentryStackTrace(frames: const []));
+    // Typically loading all images results in a larger numbers
+    expect(allDebugImages!.length > 100, isTrue);
+
+    // We can take any other random image for testing
+    final expectedImage = allDebugImages.first;
+    expect(expectedImage.imageAddr, isNotNull);
+    final imageAddr =
+        int.parse(expectedImage.imageAddr!.replaceAll('0x', ''), radix: 16);
+
+    // Use the base image address and increase by offset
+    // so the instructionAddress will be within the range of the image address
+    final imageOffset = (expectedImage.imageSize! / 2).toInt();
+    final instructionAddr = '0x${(imageAddr + imageOffset).toRadixString(16)}';
+    final sentryFrame = SentryStackFrame(instructionAddr: instructionAddr);
+
+    final debugImageByStacktrace = await SentryFlutter.native
+        ?.loadDebugImages(SentryStackTrace(frames: [sentryFrame]));
+    expect(debugImageByStacktrace!.length, 1);
+    expect(debugImageByStacktrace.first.imageAddr, isNotNull);
+    expect(debugImageByStacktrace.first.imageAddr, isNotEmpty);
+    expect(debugImageByStacktrace.first.imageAddr, expectedImage.imageAddr);
   });
 
   group('e2e', () {

@@ -20,7 +20,10 @@ export interface BaseUIEvent {
   type: TouchEventType;
   targetId: string;
   timestamp: number;
-  x?: number;        // 屏幕坐标 x（可选）
-  y?: number;        // 屏幕坐标 y（可选）
-  pointerId?: number; // 多点触控时的指针 id（可选）
+  // 屏幕坐标 x（可选）
+  x?: number;
+  // 屏幕坐标 y（可选）
+  y?: number;
+  // 多点触控时的指针 id（可选）
+  pointerId?: number;
 }

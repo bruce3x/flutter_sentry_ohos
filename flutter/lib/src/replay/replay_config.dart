@@ -5,18 +5,21 @@ import 'scheduled_recorder_config.dart';
 @immutable
 @internal
 class ReplayConfig extends ScheduledScreenshotRecorderConfig {
+  final double windowWidth;
+
+  final double windowHeight;
+
   @override
   double get width => super.width!;
 
   @override
   double get height => super.height!;
 
-  final int bitRate;
-
   const ReplayConfig({
+    required this.windowWidth,
+    required this.windowHeight,
     required double super.width,
     required double super.height,
-    required super.frameRate,
-    required this.bitRate,
+    super.frameRate = 1,
   });
 }

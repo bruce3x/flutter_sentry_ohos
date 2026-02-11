@@ -2,6 +2,7 @@ import 'package:collection/collection.dart';
 import 'package:mockito/mockito.dart';
 import 'package:sentry/sentry.dart';
 import 'package:sentry/src/client_reports/discard_reason.dart';
+import 'package:sentry/src/propagation_context.dart';
 import 'package:sentry/src/sentry_tracer.dart';
 import 'package:sentry/src/transport/data_category.dart';
 import 'package:test/test.dart';
@@ -33,9 +34,11 @@ void main() {
 
   group('Hub captures', () {
     late Fixture fixture;
+    late SentryEvent fakeEvent;
 
     setUp(() {
       fixture = Fixture();
+      fakeEvent = getFakeEvent();
     });
 
     test(
@@ -85,8 +88,19 @@ void main() {
       expect(fixture.client.captureEventCalls.first.scope, isNotNull);
     });
 
+    test('should capture exception with message', () async {
+      final hub = fixture.getSut();
+      await hub.captureException(fakeException,
+          message: SentryMessage('Sentry rocks'));
+
+      expect(fixture.client.captureEventCalls.first.event.message?.formatted,
+          'Sentry rocks');
+    });
+
     test('should capture message', () async {
       final hub = fixture.getSut();
+      final fakeMessage = getFakeMessage();
+
       await hub.captureMessage(
         fakeMessage.formatted,
         level: SentryLevel.warning,
@@ -98,21 +112,6 @@ void main() {
       expect(
           fixture.client.captureMessageCalls.first.level, SentryLevel.warning);
       expect(fixture.client.captureMessageCalls.first.scope, isNotNull);
-    });
-
-    test('should capture metrics', () async {
-      final hub = fixture.getSut();
-      await hub.captureMetrics(fakeMetrics);
-
-      expect(fixture.client.captureMetricsCalls.length, 1);
-      expect(
-        fixture.client.captureMetricsCalls.first.values,
-        [
-          [fakeMetric],
-          [fakeMetric, fakeMetric2],
-          [fakeMetric, fakeMetric3, fakeMetric4],
-        ],
-      );
     });
 
     test('should save the lastEventId', () async {
@@ -410,6 +409,32 @@ void main() {
       expect(
           fixture.client.captureTransactionCalls.first.traceContext, context);
     });
+
+    test('captureTransaction hint is passed to client', () async {
+      final hub = fixture.getSut();
+
+      var hint = Hint();
+      var tr = SentryTransaction(fixture.tracer);
+      await hub.captureTransaction(tr, hint: hint);
+
+      expect(fixture.client.captureTransactionCalls.first.hint, hint);
+    });
+
+    test(
+        'startTransactionWithContext sets traceId from scope propagationContext',
+        () async {
+      final hub = fixture.getSut();
+
+      hub.scope.propagationContext = PropagationContext();
+      final tr1 = hub.startTransactionWithContext(fixture._context);
+      expect(tr1.traceContext()?.traceId, hub.scope.propagationContext.traceId);
+
+      hub.scope.propagationContext = PropagationContext();
+      final tr2 = hub.startTransactionWithContext(fixture._context);
+      expect(tr2.traceContext()?.traceId, hub.scope.propagationContext.traceId);
+
+      expect(tr1.traceContext()?.traceId, isNot(tr2.traceContext()?.traceId));
+    });
   });
 
   group('Hub profiles', () {
@@ -479,11 +504,15 @@ void main() {
   group('Hub scope', () {
     var hub = Hub(defaultTestOptions());
     var client = MockSentryClient();
+    late SentryEvent fakeEvent;
+    late SentryUser fakeUser;
 
     setUp(() {
       hub = Hub(defaultTestOptions());
       client = MockSentryClient();
       hub.bindClient(client);
+      fakeEvent = getFakeEvent();
+      fakeUser = getFakeUser();
     });
 
     test('returns scope', () async {
@@ -551,13 +580,33 @@ void main() {
         expect('test', scope.breadcrumbs.first.message);
       });
     });
+
+    test('generateNewTrace creates new trace id in propagation context', () {
+      final oldTraceId = hub.scope.propagationContext.traceId;
+
+      hub.generateNewTrace();
+
+      final newTraceId = hub.scope.propagationContext.traceId;
+      expect(oldTraceId, isNot(newTraceId));
+    });
+
+    test('generateNewTrace resets sampleRand in propagation context', () {
+      hub.scope.propagationContext.sampleRand = 1.0;
+
+      hub.generateNewTrace();
+
+      final newSampleRand = hub.scope.propagationContext.sampleRand;
+      expect(newSampleRand, isNull);
+    });
   });
 
   group('Hub scope callback', () {
     late Fixture fixture;
+    late SentryEvent fakeEvent;
 
     setUp(() {
       fixture = Fixture();
+      fakeEvent = getFakeEvent();
     });
 
     test('captureEvent should handle thrown error in scope callback', () async {
@@ -630,9 +679,11 @@ void main() {
     late Hub hub;
     late SentryClient client;
     SentryOptions options;
+    late SentryEvent fakeEvent;
 
     setUp(() {
       options = defaultTestOptions();
+      fakeEvent = getFakeEvent();
       hub = Hub(options);
       client = MockSentryClient();
       hub.bindClient(client);
@@ -737,6 +788,26 @@ void main() {
       expect(calls[2].scope?.user, isNull);
       expect(calls[2].formatted, 'foo bar 2');
     });
+
+    test(
+        'withScope should use the same propagation context as the current scope',
+        () async {
+      final hub = fixture.getSut();
+      late Scope clonedScope;
+      final currentScope = hub.scope;
+      await hub.captureEvent(SentryEvent(), withScope: (scope) async {
+        clonedScope = scope;
+      });
+
+      // Verify the propagation context is shared (same instance)
+      expect(
+          identical(
+              clonedScope.propagationContext, currentScope.propagationContext),
+          true,
+          reason: 'Propagation context should be the same instance');
+      expect(clonedScope.propagationContext.traceId,
+          currentScope.propagationContext.traceId);
+    });
   });
 
   group('ClientReportRecorder', () {
@@ -768,41 +839,33 @@ void main() {
     });
   });
 
-  group('Metrics', () {
+  group('Hub Logs', () {
     late Fixture fixture;
 
     setUp(() {
       fixture = Fixture();
     });
 
-    test('should not capture metrics if enableMetric is false', () async {
-      final hub = fixture.getSut(enableMetrics: false, debug: true);
-      await hub.captureMetrics(fakeMetrics);
+    SentryLog givenLog() {
+      return SentryLog(
+        timestamp: DateTime.now(),
+        traceId: SentryId.newId(),
+        level: SentryLogLevel.info,
+        body: 'test',
+        attributes: {
+          'attribute': SentryLogAttribute.string('value'),
+        },
+      );
+    }
 
-      expect(fixture.client.captureMetricsCalls, isEmpty);
-      expect(fixture.loggedMessage,
-          'Metrics are disabled and this \'captureMetrics\' call is a no-op.');
-    });
+    test('captures logs', () async {
+      final hub = fixture.getSut();
 
-    test('should not capture metrics if hub is closed', () async {
-      final hub = fixture.getSut(debug: true);
-      await hub.close();
+      final log = givenLog();
+      await hub.captureLog(log);
 
-      expect(hub.isEnabled, false);
-      await hub.captureMetrics(fakeMetrics);
-      expect(fixture.loggedMessage,
-          'Instance is disabled and this \'captureMetrics\' call is a no-op.');
-
-      expect(fixture.client.captureMetricsCalls, isEmpty);
-    });
-
-    test('should not capture metrics if metrics are empty', () async {
-      final hub = fixture.getSut(debug: true);
-      await hub.captureMetrics({});
-      expect(fixture.loggedMessage,
-          'Metrics are empty and this \'captureMetrics\' call is a no-op.');
-
-      expect(fixture.client.captureMetricsCalls, isEmpty);
+      expect(fixture.client.captureLogCalls.length, 1);
+      expect(fixture.client.captureLogCalls.first.log, log);
     });
   });
 }
@@ -823,14 +886,12 @@ class Fixture {
     double? tracesSampleRate = 1.0,
     TracesSamplerCallback? tracesSampler,
     bool? sampled = true,
-    bool enableMetrics = true,
     bool debug = false,
   }) {
     options.tracesSampleRate = tracesSampleRate;
     options.tracesSampler = tracesSampler;
     options.debug = debug;
-    options.enableMetrics = enableMetrics;
-    options.logger = mockLogger; // Enable logging in DiagnosticsLogger
+    options.log = mockLogger; // Enable logging in DiagnosticsLogger
 
     final hub = Hub(options);
 

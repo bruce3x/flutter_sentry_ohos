@@ -88,3 +88,4 @@ export interface ScrollEventData {
   scrollX: number;
   scrollY: number;
 }
+

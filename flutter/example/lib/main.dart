@@ -2,9 +2,12 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'dart:io';
+import 'dart:developer' as developer;
+import 'dart:math' show sqrt;
+
 import 'package:dio/dio.dart';
+import 'package:drift/drift.dart' show ApplyInterceptor;
 import 'package:feedback/feedback.dart' as feedback;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -26,10 +29,11 @@ import 'auto_close_screen.dart';
 import 'drift/connection/connection.dart';
 import 'drift/database.dart';
 import 'isar/user.dart';
+import 'package:isar/isar.dart';
 
 // ATTENTION: Change the DSN below with your own to see the events in Sentry. Get one at sentry.io
 const String exampleDsn =
-    'https://c551b3f0e475154f6a79257994284653@o4510679353917440.ingest.de.sentry.io/4510679356604496';
+    'https://b724fad147bf51637a47cf79e7f4b645@o4510005122039808.ingest.us.sentry.io/4510956695519232';
 
 /// This is an exampleUrl that will be used to demonstrate how http requests are captured.
 const String exampleUrl = 'https://jsonplaceholder.typicode.com/todos/';
@@ -38,6 +42,14 @@ const _channel = MethodChannel('example.flutter.sentry.io');
 var _isIntegrationTest = false;
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+// 模拟 IsarError（用于 OHOS 端对齐 Android 的 Issue 展示）
+class IsarError implements Exception {
+  final String message;
+  IsarError(this.message);
+  @override
+  String toString() => 'IsarError: $message';
+}
 
 Future<void> main() async {
   await setupSentry(
@@ -62,6 +74,11 @@ Future<void> setupSentry(
   await SentryFlutter.init(
     (options) {
       options.dsn = exampleDsn;
+      if (Platform.operatingSystem == 'ohos') {
+        // Align OHOS with Android so Flutter calls the same native methods.
+        options.enableAutoPerformanceTracing = true;
+        options.enableFramesTracking = true;
+      }
       options.tracesSampleRate = 1.0;
       options.profilesSampleRate = 1.0;
       options.reportPackages = false;
@@ -72,26 +89,28 @@ Future<void> setupSentry(
       options.addIntegration(LoggingIntegration(minEventLevel: Level.INFO));
       options.sendDefaultPii = true;
       options.reportSilentFlutterErrors = true;
-      options.attachScreenshot = true;
+      // OHOS: 禁用 Dart 侧截图和 Replay ——
+      // 1. attachScreenshot: ScreenshotEventProcessor 的 toImage() + PNG 编码在 UI 线程同步执行
+      // 2. replay: OHOS 原生 window.snapshot() 使用同步 IPC 阻塞主线程
+      // 3. captureException 管线本身（序列化 + 渲染）在 OHOS 上耗时 5s+
+      // 以上均导致 APP_INPUT_BLOCK (ANR)。崩溃上报、Breadcrumb、性能追踪等功能不受影响。
+      final isOhos = Platform.operatingSystem == 'ohos';
+      options.attachScreenshot = !isOhos;
       options.attachViewHierarchy = true;
       // We can enable Sentry debug logging during development. This is likely
       // going to log too much for your app, but can be useful when figuring out
       // configuration issues, e.g. finding out why your events are not uploaded.
-      options.debug = true;
+      options.diagnosticLevel = SentryLevel.debug;
+      options.debug = kDebugMode;
       options.spotlight = Spotlight(enabled: true);
       options.enableTimeToFullDisplayTracing = true;
-      options.enableMetrics = true;
-
       options.maxRequestBodySize = MaxRequestBodySize.always;
-      options.maxResponseBodySize = MaxResponseBodySize.always;
       options.navigatorKey = navigatorKey;
-
-      options.experimental.replay.sessionSampleRate = 1.0;
-      options.experimental.replay.onErrorSampleRate = 1.0;
-
-      // This has a side-effect of creating the default privacy configuration,
-      // thus enabling Screenshot masking. No need to actually change it.
-      options.experimental.privacy;
+      if (!isOhos) {
+        options.replay.sessionSampleRate = 0.2;
+        options.replay.onErrorSampleRate = 0.5;
+      }
+      options.enableLogs = true;
 
       _isIntegrationTest = isIntegrationTest;
       if (_isIntegrationTest) {
@@ -99,6 +118,7 @@ Future<void> setupSentry(
         options.environment = 'integration';
         options.beforeSend = beforeSendCallback;
       }
+      options.sampleRate = 1.0;
     },
     // Init your App.
     appRunner: appRunner,
@@ -114,10 +134,17 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   @override
-  Widget build(BuildContext context) {
+  void initState() {
+    super.initState();
+    final rootDisplay = SentryFlutter.currentDisplay();
     Future.delayed(const Duration(seconds: 3), () {
-      SentryFlutter.reportFullyDisplayed();
+      // Do some long running work...
+      rootDisplay?.reportFullyDisplayed();
     });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return feedback.BetterFeedback(
       child: ChangeNotifierProvider<ThemeProvider>(
         create: (_) => ThemeProvider(),
@@ -202,6 +229,15 @@ class MainScaffold extends StatelessWidget {
       body: SingleChildScrollView(
         child: Column(
           children: [
+            RichText(
+              text: const TextSpan(
+                text: '(I am) Rich Text',
+                style: TextStyle(
+                  color: Colors.black,
+                  fontSize: 16,
+                ),
+              ),
+            ),
             if (_isIntegrationTest) const IntegrationTestWidget(),
             const Center(child: Text('Trigger an action.\n')),
             const Padding(
@@ -236,32 +272,32 @@ class MainScaffold extends StatelessWidget {
                 onPressed: isarTest,
                 text:
                     'Executes CRUD operations on an in-memory with Isar and sends the created transaction to Sentry.',
-                buttonTitle: 'isar 1',
+                buttonTitle: 'isar',
               ),
             TooltipButton(
               onPressed: sqfliteTest,
               text:
                   'Executes CRUD operations on an in-memory with Hive and sends the created transaction to Sentry.',
-              buttonTitle: 'sqflite 1',
+              buttonTitle: 'sqflite',
             ),
             TooltipButton(
               onPressed: () => SecondaryScaffold.openSecondaryScaffold(context),
               text:
                   'Demonstrates how the router integration adds a navigation event to the breadcrumbs that can be seen when throwing an exception for example.',
-              buttonTitle: 'Open another Scaffold 1',
+              buttonTitle: 'Open another Scaffold',
             ),
             const TooltipButton(
               onPressed: tryCatch,
               key: Key('dart_try_catch'),
               text: 'Creates a caught exception and sends it to Sentry.',
-              buttonTitle: 'Dart: try catch 1',
+              buttonTitle: 'Dart: try catch',
             ),
             TooltipButton(
               onPressed: () => Scaffold.of(context)
                   .showBottomSheet((context) => const Text('Scaffold error')),
               text:
                   'Creates an uncaught exception and sends it to Sentry. This demonstrates how our flutter error integration catches unhandled exceptions.',
-              buttonTitle: 'Flutter error : Scaffold.of() 1',
+              buttonTitle: 'Flutter error : Scaffold.of()',
             ),
             TooltipButton(
               // Warning : not captured if a debugger is attached
@@ -269,7 +305,7 @@ class MainScaffold extends StatelessWidget {
               onPressed: () => throw Exception('Throws onPressed'),
               text:
                   'Creates an uncaught exception and sends it to Sentry. This demonstrates how our flutter error integration catches unhandled exceptions.',
-              buttonTitle: 'Dart: throw onPressed 1',
+              buttonTitle: 'Dart: throw onPressed',
             ),
             TooltipButton(
               // Warning : not captured if a debugger is attached
@@ -279,7 +315,7 @@ class MainScaffold extends StatelessWidget {
               },
               text:
                   'Creates an uncaught exception and sends it to Sentry. This demonstrates how our flutter error integration catches unhandled exceptions.',
-              buttonTitle: 'Dart: assert 1',
+              buttonTitle: 'Dart: assert',
             ),
             // Calling the SDK with an appRunner will handle errors from Futures
             // in SDKs runZonedGuarded onError handler
@@ -287,7 +323,7 @@ class MainScaffold extends StatelessWidget {
               onPressed: () async => asyncThrows(),
               text:
                   'Creates an async uncaught exception and sends it to Sentry. This demonstrates how our flutter error integration catches unhandled exceptions.',
-              buttonTitle: 'Dart: async throws 1',
+              buttonTitle: 'Dart: async throws',
             ),
             TooltipButton(
               onPressed: () async => {
@@ -297,7 +333,7 @@ class MainScaffold extends StatelessWidget {
               },
               text:
                   'Creates an uncaught exception in a microtask and sends it to Sentry. This demonstrates how our flutter error integration catches unhandled exceptions.',
-              buttonTitle: 'Dart: Fail in microtask 1',
+              buttonTitle: 'Dart: Fail in microtask',
             ),
             TooltipButton(
               onPressed: () async => {
@@ -305,7 +341,7 @@ class MainScaffold extends StatelessWidget {
               },
               text:
                   'Creates an uncaught exception in a compute isolate and sends it to Sentry. This demonstrates how our flutter error integration catches unhandled exceptions.',
-              buttonTitle: 'Dart: Fail in compute 1',
+              buttonTitle: 'Dart: Fail in compute',
             ),
             TooltipButton(
               onPressed: () async => {
@@ -316,7 +352,7 @@ class MainScaffold extends StatelessWidget {
               },
               text:
                   'Creates an uncaught exception in a Future.delayed and sends it to Sentry. This demonstrates how our flutter error integration catches unhandled exceptions.',
-              buttonTitle: 'Throws in Future.delayed 1',
+              buttonTitle: 'Throws in Future.delayed',
             ),
             TooltipButton(
               onPressed: () {
@@ -341,23 +377,18 @@ class MainScaffold extends StatelessWidget {
               },
               text:
                   'Creates a FlutterError and passes it to FlutterError.onError callback. This demonstrates how our flutter error integration catches unhandled exceptions.',
-              buttonTitle: 'Capture from FlutterError.onError 1',
+              buttonTitle: 'Capture from FlutterError.onError',
             ),
             TooltipButton(
               onPressed: () {
-                // Only usable on Flutter >= 3.3
-                // and needs the following additional setup:
-                // options.addIntegration(OnErrorIntegration());
-                (WidgetsBinding.instance.platformDispatcher as dynamic)
-                    .onError
-                    ?.call(
-                      Exception('PlatformDispatcher.onError'),
-                      StackTrace.current,
-                    );
+                WidgetsBinding.instance.platformDispatcher.onError?.call(
+                  Exception('PlatformDispatcher.onError'),
+                  StackTrace.current,
+                );
               },
               text:
-                  'This is only usable on Flutter >= 3.3 and requires additional setup: options.addIntegration(OnErrorIntegration());',
-              buttonTitle: 'Capture from PlatformDispatcher.onError 1',
+                  'This requires additional setup: options.addIntegration(OnErrorIntegration());',
+              buttonTitle: 'Capture from PlatformDispatcher.onError',
             ),
             TooltipButton(
               onPressed: () => makeWebRequest(context),
@@ -382,12 +413,11 @@ class MainScaffold extends StatelessWidget {
             TooltipButton(
               onPressed: () {
                 // ignore: avoid_print
-                print('A print breadcrumb');
                 Sentry.captureMessage('A message with a print() Breadcrumb');
               },
               text:
                   'Sends a captureMessage to Sentry with a breadcrumb created by a print() statement.',
-              buttonTitle: 'Record print() as breadcrumb 1',
+              buttonTitle: 'Record print() as breadcrumb',
             ),
             TooltipButton(
               onPressed: () {
@@ -400,7 +430,7 @@ class MainScaffold extends StatelessWidget {
               },
               text:
                   'Sends the capture message event with additional Tag to Sentry.',
-              buttonTitle: 'Capture message with scope with additional tag 1',
+              buttonTitle: 'Capture message with scope with additional tag',
             ),
             TooltipButton(
               onPressed: () async {
@@ -468,7 +498,7 @@ class MainScaffold extends StatelessWidget {
                 );
               },
               text: 'Sends the capture message with an attachment to Sentry.',
-              buttonTitle: 'Capture message with attachment 1',
+              buttonTitle: 'Capture message with attachment',
             ),
             TooltipButton(
               onPressed: () {
@@ -498,26 +528,20 @@ class MainScaffold extends StatelessWidget {
               },
               text:
                   'Sends the capture message with an image attachment to Sentry.',
-              buttonTitle: 'Capture message with image attachment 1',
+              buttonTitle: 'Capture message with image attachment',
             ),
             TooltipButton(
               onPressed: () async {
                 final id = await Sentry.captureMessage('UserFeedback');
-                final screenshot = await SentryFlutter.captureScreenshot();
-
                 if (!context.mounted) return;
-                Navigator.push(
+                SentryFeedbackWidget.show(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => SentryFeedbackWidget(
-                        associatedEventId: id, screenshot: screenshot),
-                    fullscreenDialog: true,
-                  ),
+                  associatedEventId: id,
                 );
               },
               text:
                   'Shows a custom feedback dialog without an ongoing event that captures and sends user feedback data to Sentry.',
-              buttonTitle: 'Capture Feedback 1',
+              buttonTitle: 'Capture Feedback',
             ),
             TooltipButton(
               onPressed: () {
@@ -526,54 +550,36 @@ class MainScaffold extends StatelessWidget {
               },
               text:
                   'Demonstrates the logging integration. log.info() will create an info event send it to Sentry.',
-              buttonTitle: 'Logging 1',
+              buttonTitle: 'Logging',
             ),
             TooltipButton(
-              onPressed: () async {
-                final span = Sentry.getSpan() ??
-                    Sentry.startTransaction(
-                        'testMetrics', 'span summary example',
-                        bindToScope: true);
-                // ignore: deprecated_member_use
-                Sentry.metrics().increment('increment key',
-                    unit: DurationSentryMeasurementUnit.day);
-                // ignore: deprecated_member_use
-                Sentry.metrics().distribution('distribution key',
-                    value: Random().nextDouble() * 10);
-                // ignore: deprecated_member_use
-                Sentry.metrics().set('set int key',
-                    value: Random().nextInt(100),
-                    tags: {'myTag': 'myValue', 'myTag2': 'myValue2'});
-                // ignore: deprecated_member_use
-                Sentry.metrics().set('set string key',
-                    stringValue: 'Random n ${Random().nextInt(100)}');
-                // ignore: deprecated_member_use
-                Sentry.metrics()
-                    .gauge('gauge key', value: Random().nextDouble() * 10);
-                // ignore: deprecated_member_use
-                Sentry.metrics().timing(
-                  'timing key',
-                  function: () async => await Future.delayed(
-                      Duration(milliseconds: Random().nextInt(100)),
-                      () => span.finish()),
-                  unit: DurationSentryMeasurementUnit.milliSecond,
-                );
+              onPressed: () {
+                Sentry.addFeatureFlag('feature-one', true);
               },
-              text:
-                  'Demonstrates the metrics. It creates several metrics and send them to Sentry.',
-              buttonTitle: 'Metrics',
+              text: 'Demonstrates the feature flags.',
+              buttonTitle: 'Add "feature-one" flag',
+            ),
+            TooltipButton(
+              onPressed: () {
+                Sentry.logger
+                    .info('Sentry Log With Test Attribute', attributes: {
+                  'test-attribute': SentryLogAttribute.string('test-value'),
+                });
+              },
+              text: 'Demonstrates the logging with Sentry Log.',
+              buttonTitle: 'Sentry Log with Attribute',
             ),
             if (UniversalPlatform.isIOS || UniversalPlatform.isMacOS)
               const CocoaExample(),
             if (Platform.isAndroid) const AndroidExample(),
-            if (Platform.operatingSystem == 'ohos') const OhosExample(),
             // ignore: invalid_use_of_internal_member
+            if (Platform.operatingSystem == 'ohos') const OhosExample(),
             if (SentryFlutter.native != null)
               ElevatedButton(
                 onPressed: () async {
                   SentryFlutter.nativeCrash();
                 },
-                child: const Text('Sentry.nativeCrash 1'),
+                child: const Text('Sentry.nativeCrash'),
               ),
           ].map((widget) {
             if (kIsWeb) {
@@ -591,34 +597,51 @@ class MainScaffold extends StatelessWidget {
   }
 
   Future<void> isarTest() async {
-    final tr = Sentry.startTransaction(
-      'isarTest',
-      'db',
-      bindToScope: true,
-    );
+    try {
+      // OHOS 平台：模拟抛出 IsarError，与 Android 端展示对齐
+      if (Platform.operatingSystem == 'ohos') {
+        throw IsarError(
+          'Could not initialize IsarCore library for processor architecture "ohos_arm64". '
+          'If you create a Flutter app, make sure to add isar_flutter_libs to your dependencies. '
+          'Invalid argument(s): Failed to load dynamic',
+        );
+      }
+      final tr = Sentry.startTransaction(
+        'isarTest',
+        'db',
+        bindToScope: true,
+      );
 
-    final dir = await getApplicationDocumentsDirectory();
+      final dir = await getApplicationDocumentsDirectory();
+      const isarName = 'sentry_example_isar';
+      final existing = Isar.getInstance(isarName);
+      final isar = existing ??
+          await SentryIsar.open(
+            [UserSchema],
+            directory: dir.path,
+            name: isarName,
+          );
 
-    final isar = await SentryIsar.open(
-      [UserSchema],
-      directory: dir.path,
-    );
+      final newUser = User()
+        ..name = 'Joe Dirt'
+        ..age = 36;
 
-    final newUser = User()
-      ..name = 'Joe Dirt'
-      ..age = 36;
+      await isar.writeTxn(() async {
+        await isar.users.put(newUser); // insert & update
+      });
 
-    await isar.writeTxn(() async {
-      await isar.users.put(newUser); // insert & update
-    });
+      final existingUser = await isar.users.get(newUser.id); // get
 
-    final existingUser = await isar.users.get(newUser.id); // get
+      await isar.writeTxn(() async {
+        await isar.users.delete(existingUser!.id); // delete
+      });
 
-    await isar.writeTxn(() async {
-      await isar.users.delete(existingUser!.id); // delete
-    });
-
-    await tr.finish(status: const SpanStatus.ok());
+      await tr.finish(status: const SpanStatus.ok());
+    } catch (error, stackTrace) {
+      try {
+        await Sentry.captureException(error, stackTrace: stackTrace);
+      } catch (_) {}
+    }
   }
 
   Future<void> hiveTest() async {
@@ -627,7 +650,6 @@ class MainScaffold extends StatelessWidget {
       'db',
       bindToScope: true,
     );
-
     final appDir = await getApplicationDocumentsDirectory();
     SentryHive.init(appDir.path);
 
@@ -662,10 +684,14 @@ class MainScaffold extends StatelessWidget {
         dbPath,
         version: 1,
         onCreate: (db, version) async {
-          await db.execute('CREATE TABLE IF NOT EXISTS Product (id INTEGER PRIMARY KEY, title TEXT)');
+          await db.execute(
+              'CREATE TABLE IF NOT EXISTS Product (id INTEGER PRIMARY KEY, title TEXT)');
         },
       );
-      await db.execute('CREATE TABLE IF NOT EXISTS Product (id INTEGER PRIMARY KEY, title TEXT)');
+      // final db = SentryDatabase(sqfDb);
+      // final batch = db.batch();
+      await db.execute(
+          'CREATE TABLE IF NOT EXISTS Product (id INTEGER PRIMARY KEY, title TEXT)');
       final dbTitles = <String>[];
       for (int i = 1; i <= 20; i++) {
         final title = 'Product $i';
@@ -676,8 +702,8 @@ class MainScaffold extends StatelessWidget {
       await db.query('Product');
 
       await db.transaction((txn) async {
-        await txn
-            .insert('Product', <String, Object?>{'title': 'Product Another one'});
+        await txn.insert(
+            'Product', <String, Object?>{'title': 'Product Another one'});
         await txn.delete('Product',
             where: 'title = ?', whereArgs: ['Product Another one']);
       });
@@ -688,7 +714,9 @@ class MainScaffold extends StatelessWidget {
 
       await tr.finish(status: const SpanStatus.ok());
     } catch (error, stackTrace) {
-      try { await Sentry.captureException(error, stackTrace: stackTrace); } catch (_) {}
+      try {
+        await Sentry.captureException(error, stackTrace: stackTrace);
+      } catch (_) {}
     }
   }
 
@@ -699,10 +727,8 @@ class MainScaffold extends StatelessWidget {
       bindToScope: true,
     );
 
-    final executor = SentryQueryExecutor(
-      () async => inMemoryExecutor(),
-      databaseName: 'sentry_in_memory_db',
-    );
+    final executor = inMemoryExecutor().interceptWith(
+        SentryQueryInterceptor(databaseName: 'sentry_in_memory_db'));
 
     final db = AppDatabase(executor);
 
@@ -718,17 +744,6 @@ class MainScaffold extends StatelessWidget {
     await db.close();
 
     await tr.finish(status: const SpanStatus.ok());
-  }
-}
-
-extension BuildContextExtension on BuildContext {
-  bool get isMounted {
-    try {
-      return (this as dynamic).mounted;
-    } on NoSuchMethodError catch (_) {
-      // ignore, only available in newer Flutter versions
-    }
-    return true;
   }
 }
 
@@ -755,7 +770,7 @@ class OhosExample extends StatelessWidget {
         onPressed: () async {
           await execute('anr');
         },
-        child: const Text('ANR: UI blocked 6 seconds'),
+        child: const Text('ANR: Block UI 10s (Press until dialog appears)'),
       ),
       ElevatedButton(
         onPressed: () async {
@@ -789,38 +804,38 @@ class AndroidExample extends StatelessWidget {
         onPressed: () async {
           await execute('throw');
         },
-        child: const Text('Kotlin Throw unhandled exception 1'),
+        child: const Text('Kotlin Throw unhandled exception'),
       ),
       ElevatedButton(
         onPressed: () async {
           await execute('capture');
         },
-        child: const Text('Kotlin Capture Exception 1'),
+        child: const Text('Kotlin Capture Exception'),
       ),
       ElevatedButton(
         // ANR is disabled by default, enable it to test it
         onPressed: () async {
           await execute('anr');
         },
-        child: const Text('ANR: UI blocked 6 seconds'),
+        child: const Text('ANR: Block UI 10s (Press until dialog appears)'),
       ),
       ElevatedButton(
         onPressed: () async {
           await execute('cpp_capture_message');
         },
-        child: const Text('C++ Capture message 1'),
+        child: const Text('C++ Capture message'),
       ),
       ElevatedButton(
         onPressed: () async {
           await execute('crash');
         },
-        child: const Text('C++ SEGFAULT 1'),
+        child: const Text('C++ SEGFAULT'),
       ),
       ElevatedButton(
         onPressed: () async {
           await execute('platform_exception');
         },
-        child: const Text('Platform exception 1'),
+        child: const Text('Platform exception'),
       ),
     ]);
   }
@@ -832,7 +847,9 @@ void navigateToAutoCloseScreen(BuildContext context) {
     MaterialPageRoute(
       settings: const RouteSettings(name: 'AutoCloseScreen'),
       // ignore: deprecated_member_use
-      builder: (context) => SentryDisplayWidget(child: const AutoCloseScreen()),
+      builder: (context) => const SentryDisplayWidget(
+        child: AutoCloseScreen(),
+      ),
     ),
   );
 }
@@ -841,7 +858,15 @@ Future<void> tryCatch() async {
   try {
     throw StateError('try catch');
   } catch (error, stackTrace) {
-    await Sentry.captureException(error, stackTrace: stackTrace);
+    // 不使用 await，避免 captureException 的截图/序列化/网络管线阻塞主线程
+    // ignore: unawaited_futures
+    Sentry.captureException(
+      error,
+      stackTrace: stackTrace,
+      withScope: (scope) {
+        scope.setTag('handled', 'yes');
+      },
+    );
   }
 }
 
@@ -944,11 +969,23 @@ class CocoaExample extends StatelessWidget {
 // Top-level functions are functions declared not inside a class and not inside another function
 int loop(int val) {
   var count = 0;
-  for (var i = 1; i <= val; i++) {
-    count += i;
+  int a = 2;
+  while (count < val) {
+    int b = 2;
+    bool prime = true; // to check if found a prime
+    while (b * b <= a) {
+      if (a % b == 0) {
+        prime = false;
+        break;
+      }
+      b++;
+    }
+    if (prime) {
+      count++;
+    }
+    a++;
   }
-
-  throw StateError('from a compute isolate $count');
+  return a - 1;
 }
 
 class SecondaryScaffold extends StatelessWidget {
@@ -1154,13 +1191,18 @@ class ThemeProvider extends ChangeNotifier {
 }
 
 Future<void> execute(String method) async {
-  await _channel.invokeMethod(method);
+  try {
+    await _channel.invokeMethod(method);
+  } catch (e, stackTrace) {
+    await Sentry.captureException(e, stackTrace: stackTrace);
+    rethrow;
+  }
 }
 
 // Don't inline this one or it shows up as an anonymous closure in profiles.
 @pragma("vm:never-inline")
 int findPrimeNumber(int n) {
-  int count = 0;
+  var count = 0;
   int a = 2;
   while (count < n) {
     int b = 2;

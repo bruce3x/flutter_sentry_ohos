@@ -20,6 +20,7 @@ import common from '@ohos.app.ability.common';
 import { FfmpegVideoEncoder } from './FfmpegVideoEncoder';
 import window from '@ohos.window';
 import { replayInfo, replayWarn, replayDebug } from './ReplayLogger';
+import { taskpool } from '@kit.ArkTS';
 
 import * as ReplayEncoderNativeStatic from 'libreplay_encoder.so';
 
@@ -55,6 +56,237 @@ interface SystemLoader {
 interface GlobalLoaderProvider {
   requireNapi?: RequireLoader;
   requireNativeModule?: RequireLoader;
+}
+
+@Concurrent
+function mp4PostProcess(path: string, durationMs: number): void {
+  const readU32 = (buf: Uint8Array, o: number): number => {
+    return ((buf[o] & 0xFF) * 16777216) + ((buf[o+1] & 0xFF) << 16) +
+      ((buf[o+2] & 0xFF) << 8) + (buf[o+3] & 0xFF);
+  };
+  const writeU32 = (buf: Uint8Array, o: number, v: number): void => {
+    buf[o] = (v >>> 24) & 0xff;
+    buf[o+1] = (v >>> 16) & 0xff;
+    buf[o+2] = (v >>> 8) & 0xff;
+    buf[o+3] = v & 0xff;
+  };
+  const readU64 = (buf: Uint8Array, o: number): bigint => {
+    return (BigInt(readU32(buf, o)) << 32n) | BigInt(readU32(buf, o + 4));
+  };
+  const writeU64 = (buf: Uint8Array, o: number, v: bigint): void => {
+    writeU32(buf, o, Number((v >> 32n) & 0xFFFFFFFFn));
+    writeU32(buf, o + 4, Number(v & 0xFFFFFFFFn));
+  };
+  const findFourcc = (buf: Uint8Array, fourcc: string, start: number = 0): number => {
+    if (buf.length < 4 || start >= buf.length - 4) return -1;
+    const c0 = fourcc.charCodeAt(0);
+    const c1 = fourcc.charCodeAt(1);
+    const c2 = fourcc.charCodeAt(2);
+    const c3 = fourcc.charCodeAt(3);
+    for (let i = start; i <= buf.length - 4; i++) {
+      if (buf[i] === c0 && buf[i+1] === c1 && buf[i+2] === c2 && buf[i+3] === c3) {
+        return i;
+      }
+    }
+    return -1;
+  };
+  const updateChunkOffsets = (moovBytes: Uint8Array, delta: number): void => {
+    let i = 0;
+    while (i < moovBytes.length - 8) {
+      const sz = readU32(moovBytes, i);
+      if (sz < 8 || i + sz > moovBytes.length) break;
+      const t = String.fromCharCode(moovBytes[i+4], moovBytes[i+5], moovBytes[i+6], moovBytes[i+7]);
+      if (t === 'stco' && moovBytes[i + 8] === 0) {
+        const cnt = readU32(moovBytes, i + 12);
+        for (let j = 0; j < cnt && i + 16 + j * 4 + 4 <= moovBytes.length; j++) {
+          const p = i + 16 + j * 4;
+          writeU32(moovBytes, p, readU32(moovBytes, p) + delta);
+        }
+      } else if (t === 'co64' && moovBytes[i + 8] === 0) {
+        const cnt = readU32(moovBytes, i + 12);
+        for (let j = 0; j < cnt && i + 16 + j * 8 + 8 <= moovBytes.length; j++) {
+          const p = i + 16 + j * 8;
+          writeU64(moovBytes, p, readU64(moovBytes, p) + BigInt(delta));
+        }
+      }
+      if (t === 'moov' || t === 'trak' || t === 'mdia' || t === 'minf' || t === 'stbl') {
+        i += 8;
+      } else {
+        i += sz;
+      }
+    }
+  };
+
+  // --- patchMp4Durations ---
+  if (path && durationMs > 0) {
+    let patchFile: fs.File | undefined;
+    try {
+      const st = fs.statSync(path);
+      const size = st && typeof st.size === 'number' ? (st.size as number) : 0;
+      if (size >= 1024) {
+        patchFile = fs.openSync(path, fs.OpenMode.READ_WRITE);
+        const buffer = new ArrayBuffer(Math.min(size, 2 * 1024 * 1024));
+        const readLen = fs.readSync(patchFile.fd, buffer);
+        if (readLen >= 64) {
+          const bytes = new Uint8Array(buffer, 0, readLen);
+          let fileOffset = 0;
+          let targetBytes = bytes;
+
+          let moovPos = findFourcc(bytes, 'moov');
+          if (moovPos < 0 && size > 2 * 1024 * 1024) {
+            const tailSize = 1024 * 1024;
+            const offset = Math.max(0, size - tailSize);
+            const tailBuffer = new ArrayBuffer(tailSize);
+            const tailReadLen = fs.readSync(patchFile.fd, tailBuffer, { offset: offset });
+            if (tailReadLen > 64) {
+              const tailBytes = new Uint8Array(tailBuffer, 0, tailReadLen);
+              const tailPos = findFourcc(tailBytes, 'moov');
+              if (tailPos >= 0) {
+                moovPos = tailPos;
+                fileOffset = offset;
+                targetBytes = tailBytes;
+              }
+            }
+          }
+
+          let modified = false;
+
+          const mvhdPos = findFourcc(targetBytes, 'mvhd');
+          if (mvhdPos >= 0) {
+            const ver = targetBytes[mvhdPos + 4];
+            if (ver === 0) {
+              const timescale = readU32(targetBytes, mvhdPos + 16);
+              if (timescale > 0) {
+                writeU32(targetBytes, mvhdPos + 20, Math.floor((durationMs * timescale) / 1000));
+                modified = true;
+              }
+            } else if (ver === 1) {
+              const timescale = readU32(targetBytes, mvhdPos + 20);
+              if (timescale > 0) {
+                writeU64(targetBytes, mvhdPos + 24, BigInt(Math.floor((durationMs * timescale) / 1000)));
+                modified = true;
+              }
+            }
+          }
+
+          let tkhdPos = 0;
+          while ((tkhdPos = findFourcc(targetBytes, 'tkhd', tkhdPos)) >= 0) {
+            const ver = targetBytes[tkhdPos + 4];
+            if (ver === 0) {
+              const ts = mvhdPos >= 0 ? readU32(targetBytes, mvhdPos + 16) : 1000;
+              writeU32(targetBytes, tkhdPos + 24, Math.floor((durationMs * ts) / 1000));
+              modified = true;
+            } else if (ver === 1) {
+              const ts = mvhdPos >= 0 ? readU32(targetBytes, mvhdPos + 20) : 1000;
+              writeU64(targetBytes, tkhdPos + 32, BigInt(Math.floor((durationMs * ts) / 1000)));
+              modified = true;
+            }
+            tkhdPos += 8;
+          }
+
+          let mdhdPos = 0;
+          let firstMdhdTimescale = 90000;
+          while ((mdhdPos = findFourcc(targetBytes, 'mdhd', mdhdPos)) >= 0) {
+            const ver = targetBytes[mdhdPos + 4];
+            if (ver === 0) {
+              const mediaTs = readU32(targetBytes, mdhdPos + 16);
+              if (firstMdhdTimescale === 90000) firstMdhdTimescale = mediaTs;
+              if (mediaTs > 0) {
+                writeU32(targetBytes, mdhdPos + 20, Math.floor((durationMs * mediaTs) / 1000));
+                modified = true;
+              }
+            } else if (ver === 1) {
+              const mediaTs = readU32(targetBytes, mdhdPos + 24);
+              if (firstMdhdTimescale === 90000) firstMdhdTimescale = mediaTs;
+              if (mediaTs > 0) {
+                writeU64(targetBytes, mdhdPos + 28, BigInt(Math.floor((durationMs * mediaTs) / 1000)));
+                modified = true;
+              }
+            }
+            mdhdPos += 8;
+          }
+
+          let sttsPos = 0;
+          while ((sttsPos = findFourcc(targetBytes, 'stts', sttsPos)) >= 0) {
+            const atomStart = sttsPos - 4;
+            if (atomStart < 0) { sttsPos += 4; continue; }
+            const atomSize = readU32(targetBytes, atomStart);
+            const version = targetBytes[sttsPos + 4];
+            const entryCount = readU32(targetBytes, sttsPos + 8);
+            if (version === 0 && entryCount > 0 && atomSize >= 16 + entryCount * 8) {
+              let totalSamples = 0;
+              for (let ei = 0; ei < entryCount; ei++) {
+                totalSamples += readU32(targetBytes, sttsPos + 12 + ei * 8);
+              }
+              if (totalSamples > 0) {
+                const totalDurationTicks = Math.floor((durationMs * firstMdhdTimescale) / 1000);
+                const correctDelta = Math.floor(totalDurationTicks / totalSamples);
+                for (let ei = 0; ei < entryCount; ei++) {
+                  writeU32(targetBytes, sttsPos + 12 + ei * 8 + 4, correctDelta);
+                }
+                modified = true;
+              }
+            }
+            sttsPos += 8;
+          }
+
+          if (modified) {
+            fs.writeSync(patchFile.fd, targetBytes.buffer, { offset: fileOffset, length: targetBytes.length });
+          }
+        }
+      }
+    } catch (_) {
+    } finally {
+      if (patchFile) { try { fs.closeSync(patchFile); } catch (_) {} }
+    }
+  }
+
+  // --- mp4Faststart ---
+  if (path) {
+    let fsFile: fs.File | undefined;
+    try {
+      const st = fs.statSync(path);
+      const fileSize = st && typeof st.size === 'number' ? st.size : 0;
+      if (fileSize >= 1024) {
+        fsFile = fs.openSync(path, fs.OpenMode.READ_WRITE);
+        interface AtomInfo { type: string; offset: number; size: number; }
+        const atoms: Array<AtomInfo> = [];
+        let offset = 0;
+        const headerBuf = new ArrayBuffer(16);
+        while (offset < fileSize) {
+          const rl = fs.readSync(fsFile.fd, headerBuf, { offset: offset, length: 8 });
+          if (rl < 8) break;
+          const hdr = new Uint8Array(headerBuf, 0, 8);
+          let atomSize = readU32(hdr, 0);
+          const atomType = String.fromCharCode(hdr[4], hdr[5], hdr[6], hdr[7]);
+          if (atomSize === 1 && rl >= 16) {
+            fs.readSync(fsFile.fd, headerBuf, { offset: offset + 8, length: 8 });
+            atomSize = Number(readU64(new Uint8Array(headerBuf, 0, 8), 0));
+          } else if (atomSize === 0) {
+            atomSize = fileSize - offset;
+          }
+          if (atomSize < 8 || offset + atomSize > fileSize) break;
+          atoms.push({ type: atomType, offset: offset, size: atomSize } as AtomInfo);
+          offset += atomSize;
+        }
+        const moovAtom = atoms.find(a => a.type === 'moov');
+        const mdatAtom = atoms.find(a => a.type === 'mdat');
+        if (moovAtom && mdatAtom && moovAtom.offset >= mdatAtom.offset) {
+          const moovData = new ArrayBuffer(moovAtom.size);
+          fs.readSync(fsFile.fd, moovData, { offset: moovAtom.offset, length: moovAtom.size });
+          const moovBytes = new Uint8Array(moovData);
+          updateChunkOffsets(moovBytes, moovAtom.size);
+          const mdatData = new ArrayBuffer(mdatAtom.size);
+          fs.readSync(fsFile.fd, mdatData, { offset: mdatAtom.offset, length: mdatAtom.size });
+          fs.writeSync(fsFile.fd, moovBytes.buffer, { offset: mdatAtom.offset, length: moovAtom.size });
+          fs.writeSync(fsFile.fd, mdatData, { offset: mdatAtom.offset + moovAtom.size, length: mdatAtom.size });
+        }
+      }
+    } catch (_) {
+    } finally {
+      if (fsFile) { try { fs.closeSync(fsFile); } catch (_) {} }
+    }
+  }
 }
 
 interface GlobalWithSystem extends GlobalLoaderProvider {
@@ -106,25 +338,19 @@ function acquireReplayEncoder(): ReplayEncoderNative | undefined {
       const moduleNames: string[] = [REPLAY_ENCODER_PRIMARY, REPLAY_ENCODER_ALT, REPLAY_ENCODER_FALLBACK];
       for (let i = 0; i < moduleNames.length; i++) {
         const name = moduleNames[i];
-        replayDebug('ShapeVideoEncoder', `Attempting to load module: ${name}`);
         const encoder: ReplayEncoderNative | undefined = loader(name);
         if (isReplayEncoderNative(encoder)) {
-          replayInfo('ShapeVideoEncoder', `Successfully loaded module: ${name}`);
           return encoder;
-        } else {
         }
         try {
           systemLoader?.loadModule?.(name, true);
         } catch (loadErr) {
-          replayDebug('ShapeVideoEncoder', `loadModule failed for ${name}: ${String(loadErr)}`);
         }
         const retried: ReplayEncoderNative | undefined = loader(name);
         if (isReplayEncoderNative(retried)) {
-          replayInfo('ShapeVideoEncoder', `Successfully loaded module after loadModule: ${name}`);
           return retried;
         }
       }
-    } else {
     }
   } catch (err) {
     replayWarn('ShapeVideoEncoder', 'Error in acquireReplayEncoder: ' + String(err));
@@ -285,6 +511,8 @@ export class ShapeVideoEncoder {
   private rawOnlyMode: boolean = false;
   private rawOnlyLogOnce: boolean = false;
   private bufferMode: boolean = false;
+  private windowSnapshotConsecutiveFailures: number = 0;
+  private snapshotInFlight: boolean = false;
   private maxBufferDurationMs: number = 30000;
   private lastFrameTimestamp: number = -1;
   private virtualDuration: number = 0;
@@ -297,9 +525,6 @@ export class ShapeVideoEncoder {
   public setBufferConfig(enabled: boolean, maxDurationMs: number): void {
     this.bufferMode = enabled;
     this.maxBufferDurationMs = maxDurationMs;
-    if (enabled) {
-      replayInfo('ShapeVideoEncoder', 'Buffer mode enabled, maxDuration=' + maxDurationMs + 'ms');
-    }
   }
 
   public setWindow(win: window.Window | undefined): void {
@@ -320,9 +545,6 @@ export class ShapeVideoEncoder {
     this.screenshotAvailable = false;
     this.screenshotWarned = false;
     this.rawOnlyLogOnce = false;
-    try {
-      replayInfo('ShapeVideoEncoder', 'raw-only mode enabled; snapshot fallback disabled');
-    } catch (_) {}
   }
 
   private async obtainWindow(): Promise<window.Window | undefined> {
@@ -353,6 +575,24 @@ export class ShapeVideoEncoder {
   }
 
   public async captureSnapshot(): Promise<image.PixelMap | undefined> {
+    // 防止并发调用 —— window.snapshot() 在原生层同步阻塞，
+    // 如果上一次调用还未返回，跳过本次以避免阻塞累积导致 ANR
+    if (this.snapshotInFlight) {
+      return undefined;
+    }
+    this.snapshotInFlight = true;
+    try {
+      return await this.captureSnapshotInner();
+    } finally {
+      this.snapshotInFlight = false;
+    }
+  }
+
+  public isSnapshotInFlight(): boolean {
+    return this.snapshotInFlight;
+  }
+
+  private async captureSnapshotInner(): Promise<image.PixelMap | undefined> {
     // 只有在 ctx 未设置时才刷新上下文，避免覆盖已设置的上下文
     if (!this.ctx) {
     this.refreshContextFromStorage();
@@ -376,6 +616,9 @@ export class ShapeVideoEncoder {
       return componentPrime;
     }
 
+    // componentSnapshot 对 Flutter 不可用（Flutter 使用 GL surface 而非 ArkUI 组件），
+    // 回退到 window.snapshot()。注意：window.snapshot() 在原生层通过 IPC 同步阻塞
+    // 调用线程，因此必须配合 snapshotInFlight 互斥锁使用，避免并发调用累积。
     const win = await this.obtainWindow();
     if (win) {
       try {
@@ -385,15 +628,6 @@ export class ShapeVideoEncoder {
         const pm = await snapshotWindow.snapshot(snapshotOptions);
         this.screenshotAvailable = true;
         this.screenshotWarned = false;
-        try {
-          const info: image.ImageInfo = await pm.getImageInfo();
-          const fmtNum = typeof info.pixelFormat === 'number' ? info.pixelFormat : -1;
-          const strideVal = typeof info.stride === 'number' ? info.stride : -1;
-          const widthVal = info.size ? info.size.width : -1;
-          const heightVal = info.size ? info.size.height : -1;
-        } catch (infoErr) {
-          replayWarn('ShapeVideoEncoder', 'snapshot info failed: ' + String(infoErr));
-        }
         return pm;
       } catch (err) {
         replayWarn('ShapeVideoEncoder', 'window.snapshot failed: ' + String(err));
@@ -402,7 +636,6 @@ export class ShapeVideoEncoder {
     } else {
       replayWarn('ShapeVideoEncoder', 'captureSnapshot: obtainWindow returned undefined, ctx=' + (this.ctx ? 'defined' : 'undefined'));
     }
-    replayWarn('ShapeVideoEncoder', 'captureSnapshot: componentSnapshot unavailable');
     return undefined;
   }
 
@@ -436,7 +669,7 @@ export class ShapeVideoEncoder {
       const hostCtx = storedUiContext.getHostContext();
       if (hostCtx) {
         if (hostCtx !== context && !this.hostContextAdopted) {
-          replayDebug('ShapeVideoEncoder', 'resolveEffectiveContext using host context from AppStorage');
+          // using host context from AppStorage
           this.hostContextAdopted = true;
         }
         return hostCtx;
@@ -630,8 +863,6 @@ export class ShapeVideoEncoder {
     this.positionAreaSupported = true;
     this.rawFrameMode = this.rawOnlyMode;
     const base = this.resolveBaseDir(effectiveContext);
-    replayInfo('ShapeVideoEncoder', 'init baseDir=' + String(base) + ' rawOnly=' + String(this.rawOnlyMode)
-      + ' ctxCtor=' + this.getConstructorName(effectiveContext));
     if (!base) return;
 
     this.ensureNative();
@@ -666,7 +897,6 @@ export class ShapeVideoEncoder {
         this.initializedWidth = width;
         this.initializedHeight = height;
         this.debugSnapshotDumped = false;
-        replayDebug('ShapeVideoEncoder', 'encoder init ok: ' + mp4 + ' ' + width + 'x' + height + '@' + fps);
         return;
       }
       if (preferRawOnly) {
@@ -676,7 +906,6 @@ export class ShapeVideoEncoder {
         this.outputPath = undefined;
         return;
       }
-      replayDebug('ShapeVideoEncoder', 'encoder init failed, fallback will be used');
       try { if (this.fd) { fs.close(this.fd.fd); } } catch (_) {}
       this.fd = undefined;
     } catch (_) {}
@@ -694,7 +923,6 @@ export class ShapeVideoEncoder {
     try {
       this.fd = fs.openSync(mp4, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
       if (!this.native) { 
-        replayDebug('ShapeVideoEncoder', 'encoder native module missing');
       }
       const ok = this.native ? this.native.init(this.fd.fd, width, height, fps, 'video/avc') : false;
       if (ok) {
@@ -702,10 +930,8 @@ export class ShapeVideoEncoder {
         this.initializedWidth = width;
         this.initializedHeight = height;
         this.debugSnapshotDumped = false;
-        replayDebug('ShapeVideoEncoder', 'encoder init ok: ' + mp4 + ' ' + width + 'x' + height + '@' + fps);
         return;
       }
-      replayDebug('ShapeVideoEncoder', 'encoder init failed, fallback will be used');
       try { if (this.fd) { fs.close(this.fd.fd); } } catch (_) {}
       this.fd = undefined;
     } catch (_) {}
@@ -724,7 +950,6 @@ export class ShapeVideoEncoder {
     this.packerUnavailable = false;
     this.positionAreaSupported = true;
     this.rawFrameMode = this.rawOnlyMode;
-    replayDebug('ShapeVideoEncoder', 'encoder fallback to jpeg dir: ' + dir);
   }
 
   private async resolvePixelMapForEncoding(pm: image.PixelMap): Promise<PixelMapSelectionImpl> {
@@ -746,7 +971,6 @@ export class ShapeVideoEncoder {
       if (!this.rawOnlyLogOnce) {
         this.rawOnlyLogOnce = true;
         try { 
-          replayDebug('ShapeVideoEncoder', 'appendFrame skipped due to raw-only mode'); 
         } catch (_) {}
       }
       return;
@@ -820,8 +1044,6 @@ export class ShapeVideoEncoder {
             let delta = timestampMs - this.lastFrameTimestamp;
             // 期望帧间隔（毫秒），允许少量误差
             const expectedInterval = 1000 / Math.max(1, this.fps);
-            // 禁用时间戳压缩逻辑，以解决 QuickTime 和 Bilibili 等播放器时长不一致问题
-            // 让 header 时长与 wall-clock 时长保持一致，确保文件对所有播放器有效
             if (delta < 0) delta = 0;
             this.virtualDuration += delta;
             this.lastFrameTimestamp = timestampMs;
@@ -884,9 +1106,6 @@ export class ShapeVideoEncoder {
             let delta = timestampMs - this.lastFrameTimestamp;
             const expectedInterval = 1000 / Math.max(1, this.fps);
             // 暂时禁用时间戳压缩逻辑
-            // if (delta > Math.max(5000, expectedInterval * 10)) {
-            //   delta = expectedInterval;
-            // }
             if (delta < 0) delta = 0;
             this.virtualDuration += delta;
             this.lastFrameTimestamp = timestampMs;
@@ -1231,13 +1450,13 @@ export class ShapeVideoEncoder {
         if (this.native) {
           try {
             this.native.finalize();
-            // Patch MP4 duration metadata if needed (native encoder might write incorrect duration)
-            if (this.outputPath && this.virtualDuration > 0) {
-               try {
-                 this.patchMp4Durations(this.outputPath, this.virtualDuration);
-               } catch (patchErr) {
-                 replayWarn('ShapeVideoEncoder', 'finalize: failed to patch MP4 duration: ' + String(patchErr));
-               }
+            // Patch MP4 duration & faststart on a worker thread to avoid blocking the UI
+            if (this.outputPath) {
+              try {
+                await taskpool.execute(mp4PostProcess, this.outputPath, this.virtualDuration);
+              } catch (postErr) {
+                replayWarn('ShapeVideoEncoder', 'finalize: mp4PostProcess failed: ' + String(postErr));
+              }
             }
           } catch (err) {
             replayWarn('ShapeVideoEncoder', 'native.finalize() error: ' + String(err));
@@ -1881,100 +2100,6 @@ export class ShapeVideoEncoder {
       return { x: 0, y: 0, width: width, height: height } as PositionArea;
     }
     return undefined;
-  }
-
-  private patchMp4Durations(path: string, durationMs: number): void {
-    if (!path || durationMs <= 0) return;
-    let file: fs.File | undefined;
-    try {
-      const st = fs.statSync(path);
-      const size = st && typeof st.size === 'number' ? (st.size as number) : 0;
-      if (size < 1024) return; // too small
-      
-      file = fs.openSync(path, fs.OpenMode.READ_WRITE);
-      const buffer = new ArrayBuffer(1024 * 1024); // Read first 1MB
-      const readLen = fs.readSync(file.fd, buffer);
-      if (readLen < 64) return;
-      
-      const bytes = new Uint8Array(buffer, 0, readLen);
-      let mvhdPos = this.findFourcc(bytes, 'mvhd');
-      let fileOffset = 0;
-      let targetBytes = bytes;
-
-      // If not found in head, try searching in tail
-      if (mvhdPos < 0 && size > 1024 * 1024) {
-        const tailSize = 512 * 1024;
-        const offset = Math.max(0, size - tailSize);
-        const tailBuffer = new ArrayBuffer(tailSize);
-        const tailReadLen = fs.readSync(file.fd, tailBuffer, { offset: offset });
-        if (tailReadLen > 64) {
-           const tailBytes = new Uint8Array(tailBuffer, 0, tailReadLen);
-           const tailPos = this.findFourcc(tailBytes, 'mvhd');
-           if (tailPos >= 0) {
-             mvhdPos = tailPos;
-             fileOffset = offset;
-             targetBytes = tailBytes;
-           }
-        }
-      }
-
-      if (mvhdPos >= 0) {
-        const ver = targetBytes[mvhdPos + 4];
-        if (ver === 0) {
-          const timescale = this.readUint32BE(targetBytes, mvhdPos + 16);
-          if (timescale > 0) {
-            const newDuration = Math.floor((durationMs * timescale) / 1000);
-            this.writeUint32BE(targetBytes, mvhdPos + 20, newDuration);
-            fs.writeSync(file.fd, targetBytes.buffer, { offset: fileOffset, length: targetBytes.length });
-          }
-        } else if (ver === 1) {
-          const timescale = this.readUint32BE(targetBytes, mvhdPos + 20);
-          if (timescale > 0) {
-            const newDuration = BigInt(Math.floor((durationMs * timescale) / 1000));
-            this.writeUint64BE(targetBytes, mvhdPos + 24, newDuration);
-            fs.writeSync(file.fd, targetBytes.buffer, { offset: fileOffset, length: targetBytes.length });
-          }
-        }
-      }
-    } catch (e) {
-      replayWarn('ShapeVideoEncoder', 'patchMp4Durations failed: ' + String(e));
-    } finally {
-      if (file) {
-        try { fs.closeSync(file); } catch (_) {}
-      }
-    }
-  }
-
-  private findFourcc(buf: Uint8Array, fourcc: string): number {
-    if (buf.length < 4) return -1;
-    const c0 = fourcc.charCodeAt(0);
-    const c1 = fourcc.charCodeAt(1);
-    const c2 = fourcc.charCodeAt(2);
-    const c3 = fourcc.charCodeAt(3);
-    for (let i = 0; i <= buf.length - 4; i++) {
-      if (buf[i] === c0 && buf[i+1] === c1 && buf[i+2] === c2 && buf[i+3] === c3) {
-        return i;
-      }
-    }
-    return -1;
-  }
-
-  private readUint32BE(buf: Uint8Array, offset: number): number {
-    return ((buf[offset] & 0xFF) * 16777216) + ((buf[offset+1] & 0xFF) << 16) + ((buf[offset+2] & 0xFF) << 8) + (buf[offset+3] & 0xFF);
-  }
-
-  private writeUint32BE(buf: Uint8Array, offset: number, val: number): void {
-    buf[offset] = (val >>> 24) & 0xff;
-    buf[offset+1] = (val >>> 16) & 0xff;
-    buf[offset+2] = (val >>> 8) & 0xff;
-    buf[offset+3] = val & 0xff;
-  }
-
-  private writeUint64BE(buf: Uint8Array, offset: number, val: bigint): void {
-    const high = Number((val >> 32n) & 0xFFFFFFFFn);
-    const low = Number(val & 0xFFFFFFFFn);
-    this.writeUint32BE(buf, offset, high);
-    this.writeUint32BE(buf, offset + 4, low);
   }
 
 }

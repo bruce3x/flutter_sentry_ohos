@@ -1,13 +1,18 @@
+// ignore_for_file: deprecated_member_use_from_same_package
+
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:sentry/sentry.dart';
 import 'package:sentry/src/dart_exception_type_identifier.dart';
 import 'package:sentry/src/event_processor/deduplication_event_processor.dart';
+import 'package:sentry/src/logs_enricher_integration.dart';
+import 'package:sentry/src/feature_flags_integration.dart';
 import 'package:test/test.dart';
 
-import 'fake_platform_checker.dart';
 import 'mocks.dart';
 import 'mocks/mock_integration.dart';
+import 'mocks/mock_runtime_checker.dart';
 import 'mocks/mock_sentry_client.dart';
 import 'test_utils.dart';
 
@@ -18,6 +23,8 @@ void main() {
     var client = MockSentryClient();
 
     var anException = Exception();
+    late SentryEvent fakeEvent;
+    late SentryMessage fakeMessage;
 
     setUp(() async {
       final options = defaultTestOptions();
@@ -29,7 +36,8 @@ void main() {
         },
       );
       anException = Exception('anException');
-
+      fakeEvent = getFakeEvent();
+      fakeMessage = getFakeMessage();
       client = MockSentryClient();
       Sentry.bindClient(client);
     });
@@ -94,6 +102,14 @@ void main() {
       expect(client.captureEventCalls.first.scope, isNotNull);
     });
 
+    test('should capture exception with message', () async {
+      await Sentry.captureException(anException,
+          message: SentryMessage('Sentry rocks'));
+
+      expect(client.captureEventCalls.first.event.message?.formatted,
+          'Sentry rocks');
+    });
+
     test('should capture exception withScope', () async {
       await Sentry.captureException(anException, withScope: (scope) {
         scope.setUser(SentryUser(id: 'foo bar'));
@@ -135,6 +151,14 @@ void main() {
     });
 
     test('should start transaction with context', () async {
+      final tr = Sentry.startTransactionWithContext(
+          SentryTransactionContext('name', 'operation'));
+      await tr.finish();
+
+      expect(client.captureTransactionCalls.length, 1);
+    });
+
+    test('should start transaction with hint', () async {
       final tr = Sentry.startTransactionWithContext(
           SentryTransactionContext('name', 'operation'));
       await tr.finish();
@@ -256,6 +280,12 @@ void main() {
       );
       expect(
         optionsReference.integrations
+            .whereType<FeatureFlagsIntegration>()
+            .length,
+        1,
+      );
+      expect(
+        optionsReference.integrations
             .whereType<IsolateErrorIntegration>()
             .length,
         1,
@@ -267,6 +297,27 @@ void main() {
         1,
       );
     }, onPlatform: {'browser': Skip()});
+
+    test('should add logsEnricherIntegration', () async {
+      late SentryOptions optionsReference;
+      final options = defaultTestOptions();
+
+      await Sentry.init(
+        options: options,
+        (options) {
+          options.dsn = fakeDsn;
+          optionsReference = options;
+        },
+        appRunner: appRunner,
+      );
+
+      expect(
+        optionsReference.integrations
+            .whereType<LogsEnricherIntegration>()
+            .length,
+        1,
+      );
+    });
 
     test('should add only web compatible default integrations', () async {
       final options = defaultTestOptions();
@@ -281,6 +332,41 @@ void main() {
         },
       );
     }, onPlatform: {'vm': Skip()});
+
+    test('should add feature flag FeatureFlagsIntegration', () async {
+      await Sentry.init(
+        options: defaultTestOptions(),
+        (options) => options.dsn = fakeDsn,
+      );
+
+      await Sentry.addFeatureFlag('foo', true);
+
+      expect(
+        Sentry.currentHub.scope.contexts[SentryFeatureFlags.type]?.values.first
+            .flag,
+        equals('foo'),
+      );
+      expect(
+        Sentry.currentHub.scope.contexts[SentryFeatureFlags.type]?.values.first
+            .result,
+        equals(true),
+      );
+    });
+
+    test('addFeatureFlag should ignore non-boolean values', () async {
+      await Sentry.init(
+        options: defaultTestOptions(),
+        (options) => options.dsn = fakeDsn,
+      );
+
+      await Sentry.addFeatureFlag('foo1', 'some string');
+      await Sentry.addFeatureFlag('foo2', 123);
+      await Sentry.addFeatureFlag('foo3', 1.23);
+
+      final featureFlagsContext =
+          Sentry.currentHub.scope.contexts[SentryFeatureFlags.type];
+      expect(featureFlagsContext, isNull);
+    });
 
     test('should close integrations', () async {
       final integration = MockIntegration();
@@ -360,7 +446,81 @@ void main() {
         ),
       );
     });
-  });
+
+    test('should set options.debug to true when in debug mode', () async {
+      final options = defaultTestOptions();
+      options.runtimeChecker = MockRuntimeChecker(isDebug: true);
+
+      expect(options.debug, isFalse);
+      await Sentry.init(
+        options: options,
+        (options) {
+          options.dsn = fakeDsn;
+        },
+      );
+      expect(options.debug, isTrue);
+    });
+
+    test('should respect user options.debug when in debug mode', () async {
+      final options = defaultTestOptions();
+      options.runtimeChecker = MockRuntimeChecker(isDebug: true);
+
+      expect(options.debug, isFalse);
+      await Sentry.init(
+        options: options,
+        (options) {
+          options.dsn = fakeDsn;
+          options.debug = false;
+        },
+      );
+      expect(options.debug, isFalse);
+    });
+
+    test('should leave options.debug unchanged when not in debug mode',
+        () async {
+      final options = defaultTestOptions();
+      options.runtimeChecker = MockRuntimeChecker(isDebug: false);
+
+      expect(options.debug, isFalse);
+      await Sentry.init(
+        options: options,
+        (options) {
+          options.dsn = fakeDsn;
+        },
+      );
+      expect(options.debug, isFalse);
+    });
+
+    test('isolate completes when closing sentry', () async {
+      final onExit = ReceivePort();
+
+      Future<void> _runSentry(String message) async {
+        await Sentry.init((options) {
+          options
+            ..dsn = fakeDsn
+            ..tracesSampleRate = 1.0;
+        });
+        await Sentry.close();
+      }
+
+      final completer = Completer<void>();
+
+      await Isolate.spawn<String>(
+        _runSentry,
+        'test',
+        onExit: onExit.sendPort,
+      );
+
+      var completed = false;
+      onExit.listen((message) {
+        completed = true;
+        completer.complete();
+      });
+
+      await completer.future;
+      expect(completed, true);
+    });
+  }, testOn: 'vm');
 
   test('should complete when appRunner is not called in runZonedGuarded',
       () async {
@@ -390,19 +550,21 @@ void main() {
   });
 
   test('options.environment debug', () async {
-    final sentryOptions = defaultTestOptions(FakePlatformChecker.debugMode());
+    final sentryOptions =
+        defaultTestOptions(checker: MockRuntimeChecker(isDebug: true));
     await Sentry.init(
       (options) {
         options.dsn = fakeDsn;
         expect(options.environment, 'debug');
-        expect(options.debug, false);
+        expect(options.debug, true);
       },
       options: sentryOptions,
     );
   });
 
   test('options.environment profile', () async {
-    final sentryOptions = defaultTestOptions(FakePlatformChecker.profileMode());
+    final sentryOptions =
+        defaultTestOptions(checker: MockRuntimeChecker(isProfile: true));
 
     await Sentry.init(
       (options) {
@@ -415,7 +577,8 @@ void main() {
   });
 
   test('options.environment production (defaultEnvironment)', () async {
-    final sentryOptions = defaultTestOptions(FakePlatformChecker.releaseMode());
+    final sentryOptions =
+        defaultTestOptions(checker: MockRuntimeChecker(isRelease: true));
     await Sentry.init(
       (options) {
         options.dsn = fakeDsn;
@@ -427,24 +590,25 @@ void main() {
   });
 
   test('options.logger is set by setting the debug flag', () async {
-    final sentryOptions = defaultTestOptions(FakePlatformChecker.debugMode());
+    final sentryOptions =
+        defaultTestOptions(checker: MockRuntimeChecker(isDebug: true));
 
     await Sentry.init(
       (options) {
         options.dsn = fakeDsn;
         options.debug = true;
-        // ignore: deprecated_member_use_from_same_package
-        expect(options.logger, isNot(noOpLogger));
+        expect(options.diagnosticLog?.logger, isNot(noOpLog));
 
         options.debug = false;
-        // ignore: deprecated_member_use_from_same_package
-        expect(options.logger, noOpLogger);
+        expect(options.diagnosticLog?.logger, noOpLog);
+
+        options.debug = true;
+        expect(options.diagnosticLog?.logger, isNot(noOpLog));
       },
       options: sentryOptions,
     );
 
-    // ignore: deprecated_member_use_from_same_package
-    expect(sentryOptions.logger, isNot(dartLogger));
+    expect(sentryOptions.diagnosticLog?.logger, isNot(noOpLog));
   });
 
   group('Sentry init optionsConfiguration', () {
@@ -455,10 +619,12 @@ void main() {
     });
 
     test('throw is handled and logged', () async {
-      final sentryOptions = defaultTestOptions()
-        ..automatedTestMode = false
-        ..debug = true
-        ..logger = fixture.mockLogger;
+      // Use release mode in runtime checker to avoid additional log
+      final sentryOptions =
+          defaultTestOptions(checker: MockRuntimeChecker(isRelease: true))
+            ..automatedTestMode = false
+            ..debug = true
+            ..log = fixture.mockLogger;
 
       final exception = Exception("Exception in options callback");
       await Sentry.init(

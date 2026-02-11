@@ -19,7 +19,6 @@ import storageStatistics from '@ohos.file.storageStatistics';
 import process from '@ohos.process';
 import batteryInfo from '@ohos.batteryInfo';
 import hidebug from '@ohos.hidebug';
-import systemDateTime from '@ohos.systemDateTime';
 import fs from '@ohos.file.fs';
 import util from '@ohos.util';
 import { bundleManager } from '@kit.AbilityKit';
@@ -29,7 +28,6 @@ import { bundleManager } from '@kit.AbilityKit';
 // 避免将命名空间当作对象访问，暂不直接使用 @ohos.deviceInfo 额外字段
 import { BusinessError, deviceInfo } from '@kit.BasicServicesKit';
 import { i18n } from '@kit.LocalizationKit';
-
 
 type Primitive = string | number | boolean | null | undefined;
 
@@ -83,10 +81,8 @@ export function collectDeviceContext(): Record<string, Primitive> {
 
     // 补充 Android 对齐的字段
     try {
-      // 设备名称：优先使用 marketName (营销名)，否则留空由后端显示 Model
-      if (deviceInfo.marketName) {
-        ctx['name'] = deviceInfo.marketName;
-      }
+      // 设备名称（回退到 localhost）
+      ctx['name'] = 'localhost';
     } catch (_) {}
 
     try {
@@ -187,59 +183,40 @@ export function collectDeviceContext(): Record<string, Primitive> {
       // 存储信息
       let totalBytes: number | undefined = undefined;
       let freeBytes: number | undefined = undefined;
-      if (typeof storageStatistics.getTotalSizeSync === 'function') {
-        totalBytes = storageStatistics.getTotalSizeSync();
+      if (deviceInfo.sdkApiVersion >= 15) {
+        if (typeof storageStatistics.getTotalSizeSync === 'function') {
+          totalBytes = storageStatistics.getTotalSizeSync();
+        }
+        if (typeof storageStatistics.getFreeSizeSync === 'function') {
+          freeBytes = storageStatistics.getFreeSizeSync();
+        }
+        if (typeof totalBytes === 'number') ctx['storage_size'] = totalBytes;
+        if (typeof freeBytes === 'number') ctx['free_storage'] = freeBytes;
       }
-      if (typeof storageStatistics.getFreeSizeSync === 'function') {
-        freeBytes = storageStatistics.getFreeSizeSync();
-      }
-      if (typeof totalBytes === 'number') ctx['storage_size'] = totalBytes;
-      if (typeof freeBytes === 'number') ctx['free_storage'] = freeBytes;
+
     } catch (_) {}
 
     try {
       // 开机时间
-      try {
-        // 优先使用 systemDateTime API
-        // API 12+ 需要传入 TimeType.STARTUP (包含休眠时间)
-        const uptime = systemDateTime.getUptime(systemDateTime.TimeType.STARTUP);
-        if (uptime > 0) {
-          const bootMs = Date.now() - uptime;
+      const uptimeTxt = tryReadText('/proc/uptime');
+      if (uptimeTxt !== undefined) {
+        const secStr = uptimeTxt.split(' ')[0];
+        const secs = parseFloat(secStr);
+        if (!isNaN(secs)) {
+          const bootMs = Date.now() - Math.floor(secs * 1000);
           ctx['boot_time'] = new Date(bootMs).toISOString();
-        }
-      } catch (_) {}
-
-      if (!ctx['boot_time']) {
-        const uptimeTxt = tryReadText('/proc/uptime');
-        if (uptimeTxt !== undefined) {
-          const secStr = uptimeTxt.split(' ')[0];
-          const secs = parseFloat(secStr);
-          if (!isNaN(secs)) {
-            const bootMs = Date.now() - Math.floor(secs * 1000);
-            ctx['boot_time'] = new Date(bootMs).toISOString();
-          }
         }
       }
     } catch (_) {}
 
     try {
       // 处理器频率
-      // 优先尝试 /proc/cpuinfo
       const cpuinfo = tryReadText('/proc/cpuinfo');
       if (cpuinfo) {
         const mhzLine = cpuinfo.split('\n').find((l) => l.toLowerCase().indexOf('cpu mhz') >= 0 || l.toLowerCase().indexOf('bogomips') >= 0);
         if (mhzLine) {
           const num = parseFloat(mhzLine.replace(/[^0-9.]/g, ''));
           if (!isNaN(num)) ctx['processor_frequency'] = Math.floor(num);
-        }
-      }
-
-      // Fallback: 尝试读取 cpuinfo_max_freq (单位通常为 kHz)
-      if (!ctx['processor_frequency']) {
-        const maxFreq = tryReadText('/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq');
-        if (maxFreq) {
-            const val = parseFloat(maxFreq);
-            if (!isNaN(val)) ctx['processor_frequency'] = Math.floor(val / 1000);
         }
       }
     } catch (_) {}
@@ -257,17 +234,8 @@ export function collectDeviceContext(): Record<string, Primitive> {
     } catch (_) {}
 
     try {
-      // 模拟器状态检测
-      // 检查 marketName, productModel 或 osFullName 是否包含 emulator/simulator 关键字
-      let isSim = false;
-      try {
-        const model = deviceInfo.marketName || deviceInfo.productModel;
-        const os = deviceInfo.osFullName;
-        if ((model && /emulator|simulator/i.test(model)) || (os && /emulator|simulator/i.test(os))) {
-          isSim = true;
-        }
-      } catch (_) {}
-      ctx['simulator'] = isSim;
+      // 模拟器状态（默认 false）
+      ctx['simulator'] = false;
     } catch (_) {}
 
     try {
@@ -301,7 +269,7 @@ export function collectDeviceContext(): Record<string, Primitive> {
         if (!ctx['archs']) {
             const isArm64 = cpuinfo.indexOf('AArch64') >= 0 || cpuinfo.indexOf('ARMv8') >= 0 || cpuinfo.toLowerCase().indexOf('armv8') >= 0;
             const archs: Array<string> = isArm64 ? ['arm64-v8a', 'armeabi-v7a', 'armeabi'] : ['armeabi-v7a', 'armeabi'];
-            ctx['archs'] = archs.join(',');
+            ctx['archs'] = archs.join(','); // 序列化阶段转换为数组
         }
         // 提取 Hardware/Model 字段作为简化的 chipset
         const lines = cpuinfo.split('\n');
@@ -473,23 +441,13 @@ export function collectRuntimeContext(): RuntimeContext {
   } catch (_) {}
   try {
     // 开机时间
-    try {
-      const uptime = systemDateTime.getUptime(systemDateTime.TimeType.STARTUP);
-      if (uptime > 0) {
-        const bootMs = Date.now() - uptime;
+    const uptimeTxt = tryReadText('/proc/uptime');
+    if (uptimeTxt !== undefined) {
+      const secStr = uptimeTxt.split(' ')[0];
+      const secs = parseFloat(secStr);
+      if (!isNaN(secs)) {
+        const bootMs = Date.now() - Math.floor(secs * 1000);
         info.bootTime = new Date(bootMs).toISOString();
-      }
-    } catch (_) {}
-
-    if (!info.bootTime) {
-      const uptimeTxt = tryReadText('/proc/uptime');
-      if (uptimeTxt !== undefined) {
-        const secStr = uptimeTxt.split(' ')[0];
-        const secs = parseFloat(secStr);
-        if (!isNaN(secs)) {
-          const bootMs = Date.now() - Math.floor(secs * 1000);
-          info.bootTime = new Date(bootMs).toISOString();
-        }
       }
     }
   } catch (_) {}
@@ -592,19 +550,14 @@ export function updateForegroundPage(name: string): void {
 let _appCtxCache: Record<string, Primitive> | null = null;
 let _appCtxInitStarted: boolean = false;
 
-interface LocalBundleInfo { name?: string; bundleName?: string; versionName?: string; versionCode?: number; appInfo?: LocalAppInfo; reqPermissionDetails?: Array<Permission>; permissionGrantStates?: Array<number> }
-interface LocalAppInfo { label?: string, permissions?: Array<string> }
-interface Permission { name?: string, reason?: string }
+interface LocalBundleInfo { name?: string; bundleName?: string; versionName?: string; versionCode?: number; appInfo?: LocalAppInfo }
+interface LocalAppInfo { permissions?: Array<string> }
 
 function initAppContextIfNeeded(): void {
   if (_appCtxInitStarted) return;
   _appCtxInitStarted = true;
   try {
-    // 增加 GET_BUNDLE_INFO_WITH_REQUESTED_PERMISSION (16) 以获取权限列表
-    const flags = bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION |
-                  bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_METADATA |
-                  16; // 16 = GET_BUNDLE_INFO_WITH_REQUESTED_PERMISSION
-
+    const flags = bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION | bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_METADATA;
     bundleManager.getBundleInfoForSelf(flags).then((data) => {
       try {
         const info = (data as LocalBundleInfo);
@@ -612,9 +565,8 @@ function initAppContextIfNeeded(): void {
         const cache: Record<string, Primitive> = {};
 
         // 基础应用信息
-        let label = info.appInfo?.label;
-        if (appNameValue !== undefined) cache['app_name'] = label ?? "";
-        if (info.name !== undefined) cache['app_identifier'] = info.name;
+        if (appNameValue !== undefined) cache['app_name'] = appNameValue;
+        if (info.bundleName !== undefined) cache['app_identifier'] = info.bundleName;
         if (info.versionName !== undefined) cache['app_version'] = info.versionName;
         if (info.versionCode !== undefined) cache['app_build'] = info.versionCode;
 
@@ -643,18 +595,12 @@ function initAppContextIfNeeded(): void {
         } catch (_) {}
 
         // 权限信息（转换为键值对格式以对齐 Android）
-        // 优先读取 reqPermissions (在某些API版本中权限直接位于 BundleInfo 下)
-        const permissionGrantStates: Array<number> = info.permissionGrantStates ?? [];
-        const perms: Array<Permission> = info.reqPermissionDetails ?? [];
-        if (perms && perms.length > 0 && permissionGrantStates && permissionGrantStates.length > 0) {
+        if (info.appInfo && info.appInfo.permissions && info.appInfo.permissions.length > 0) {
           // 创建 the permissions map 格式：{permission: 'granted'}
           const permissionsMap: Record<string, string> = {};
-          for (let i = 0; i < perms.length; i++) {
-            const perm: Permission = perms[i];
-            const permissionGrantState: number = permissionGrantStates[i];
-            if (perm.name) {
-              permissionsMap[perm.name] = permissionGrantState == 0 ? 'granted' : 'not_granted';
-            }
+          for (let i = 0; i < info.appInfo.permissions.length; i++) {
+            const perm = info.appInfo.permissions[i];
+            permissionsMap[perm] = 'granted';
           }
           // 缓存为JSON字符串，后续序列化时解析
           cache['permissionsJson'] = JSON.stringify(permissionsMap);

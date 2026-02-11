@@ -17,27 +17,27 @@ class SentryNativeJava extends SentryNativeChannel {
   Future<void> init(Hub hub) async {
     // We only need these when replay is enabled (session or error capture)
     // so let's set it up conditionally. This allows Dart to trim the code.
-    if (options.experimental.replay.isEnabled) {
+    if (options.replay.isEnabled) {
       channel.setMethodCallHandler((call) async {
         switch (call.method) {
           case 'ReplayRecorder.start':
             final replayId =
                 SentryId.fromId(call.arguments['replayId'] as String);
 
+            _replayRecorder = AndroidReplayRecorder.factory(options);
+            await _replayRecorder!.start();
+            hub.configureScope((s) {
+              // ignore: invalid_use_of_internal_member
+              s.replayId = replayId;
+            });
+            break;
+          case 'ReplayRecorder.onConfigurationChanged':
             final config = ScheduledScreenshotRecorderConfig(
                 width: (call.arguments['width'] as num).toDouble(),
                 height: (call.arguments['height'] as num).toDouble(),
                 frameRate: call.arguments['frameRate'] as int);
 
-            _replayRecorder = AndroidReplayRecorder(
-                config, options, channel, call.arguments['directory'] as String)
-              ..start();
-
-            hub.configureScope((s) {
-              // ignore: invalid_use_of_internal_member
-              s.replayId = replayId;
-            });
-
+            await _replayRecorder?.onConfigurationChanged(config);
             break;
           case 'ReplayRecorder.stop':
             hub.configureScope((s) {
@@ -55,6 +55,9 @@ class SentryNativeJava extends SentryNativeChannel {
             break;
           case 'ReplayRecorder.resume':
             await _replayRecorder?.resume();
+            break;
+          case 'ReplayRecorder.reset':
+            // ignored
             break;
           default:
             throw UnimplementedError('Method ${call.method} not implemented');

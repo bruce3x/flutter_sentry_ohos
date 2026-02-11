@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:meta/meta.dart';
 
 import '../sentry.dart';
-import 'metrics/local_metrics_aggregator.dart';
 import 'profiling.dart';
 import 'sentry_tracer_finish_status.dart';
 import 'utils/sample_rate_format.dart';
@@ -92,7 +91,8 @@ class SentryTracer extends ISentrySpan {
   }
 
   @override
-  Future<void> finish({SpanStatus? status, DateTime? endTimestamp}) async {
+  Future<void> finish(
+      {SpanStatus? status, DateTime? endTimestamp, Hint? hint}) async {
     final commonEndTimestamp = endTimestamp ?? _hub.options.clock();
     _autoFinishAfterTimer?.cancel();
     _finishStatus = SentryTracerFinishStatus.finishing(status);
@@ -136,7 +136,7 @@ class SentryTracer extends ISentrySpan {
       if (finish is Future) {
         await finish;
       }
-      await _rootSpan.finish(endTimestamp: _rootEndTimestamp);
+      await _rootSpan.finish(endTimestamp: _rootEndTimestamp, hint: hint);
 
       // remove from scope
       await _hub.configureScope((scope) {
@@ -160,6 +160,7 @@ class SentryTracer extends ISentrySpan {
       await _hub.captureTransaction(
         transaction,
         traceContext: traceContext(),
+        hint: hint,
       );
     } finally {
       profiler?.dispose();
@@ -213,7 +214,7 @@ class SentryTracer extends ISentrySpan {
     }
 
     if (children.length >= _hub.options.maxSpans) {
-      _hub.options.logger(
+      _hub.options.log(
         SentryLevel.warning,
         'Span operation: $operation, description: $description dropped due to limit reached. Returning NoOpSpan.',
       );
@@ -241,7 +242,7 @@ class SentryTracer extends ISentrySpan {
     _scheduleTimer();
 
     if (children.length >= _hub.options.maxSpans) {
-      _hub.options.logger(
+      _hub.options.log(
         SentryLevel.warning,
         'Span operation: $operation, description: $description dropped due to limit reached. Returning NoOpSpan.',
       );
@@ -276,10 +277,15 @@ class SentryTracer extends ISentrySpan {
 
   Future<void> _finishedCallback({
     DateTime? endTimestamp,
+    Hint? hint,
   }) async {
     final finishStatus = _finishStatus;
     if (finishStatus.finishing) {
-      await finish(status: finishStatus.status, endTimestamp: endTimestamp);
+      await finish(
+        status: finishStatus.status,
+        endTimestamp: endTimestamp,
+        hint: hint,
+      );
     }
   }
 
@@ -339,7 +345,7 @@ class SentryTracer extends ISentrySpan {
   @override
   void setMeasurement(String name, num value, {SentryMeasurementUnit? unit}) {
     if (finished) {
-      _hub.options.logger(SentryLevel.debug,
+      _hub.options.log(SentryLevel.debug,
           "The tracer is already finished. Measurement $name cannot be set");
       return;
     }
@@ -359,7 +365,7 @@ class SentryTracer extends ISentrySpan {
     final context = traceContext();
 
     if (context != null) {
-      final baggage = context.toBaggage(logger: _hub.options.logger);
+      final baggage = context.toBaggage(log: _hub.options.log);
       return SentryBaggageHeader.fromBaggage(baggage);
     }
     return null;
@@ -372,20 +378,16 @@ class SentryTracer extends ISentrySpan {
       return _sentryTraceContextHeader;
     }
 
-    SentryUser? user;
-    _hub.configureScope((scope) => user = scope.user);
-
     _sentryTraceContextHeader = SentryTraceContextHeader(
       _rootSpan.context.traceId,
       _hub.options.parsedDsn.publicKey,
       release: _hub.options.release,
       environment: _hub.options.environment,
       userId: null, // because of PII not sending it for now
-      // ignore: deprecated_member_use_from_same_package
-      userSegment: user?.segment,
       transaction:
           _isHighQualityTransactionName(transactionNameSource) ? name : null,
       sampleRate: _sampleRateToString(_rootSpan.samplingDecision?.sampleRate),
+      sampleRand: _sampleRandToString(_rootSpan.samplingDecision?.sampleRand),
       sampled: _rootSpan.samplingDecision?.sampled.toString(),
     );
 
@@ -397,6 +399,13 @@ class SentryTracer extends ISentrySpan {
       return null;
     }
     return sampleRate != null ? SampleRateFormat().format(sampleRate) : null;
+  }
+
+  String? _sampleRandToString(double? sampleRand) {
+    if (!isValidSampleRand(sampleRand)) {
+      return null;
+    }
+    return sampleRand != null ? SampleRateFormat().format(sampleRand) : null;
   }
 
   bool _isHighQualityTransactionName(SentryTransactionNameSource source) {
@@ -426,8 +435,4 @@ class SentryTracer extends ISentrySpan {
       });
     }
   }
-
-  @override
-  LocalMetricsAggregator? get localMetricsAggregator =>
-      _rootSpan.localMetricsAggregator;
 }

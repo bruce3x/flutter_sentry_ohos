@@ -1,27 +1,24 @@
-import 'package:meta/meta.dart';
-import 'sentry_trace_origins.dart';
-
 import 'protocol.dart';
 import 'sentry_baggage.dart';
+import 'sentry_trace_origins.dart';
 import 'tracing.dart';
 
-@immutable
 class SentryTransactionContext extends SentrySpanContext {
-  final String name;
-  final SentryTracesSamplingDecision? parentSamplingDecision;
-  final SentryTransactionNameSource? transactionNameSource;
-  final SentryTracesSamplingDecision? samplingDecision;
+  String name;
+  SentryTransactionNameSource? transactionNameSource;
+  SentryTracesSamplingDecision? samplingDecision;
+  SentryTracesSamplingDecision? parentSamplingDecision;
 
   SentryTransactionContext(
     this.name,
     String operation, {
     super.description,
-    this.parentSamplingDecision,
     super.traceId,
     super.spanId,
     super.parentSpanId,
     this.transactionNameSource,
     this.samplingDecision,
+    this.parentSamplingDecision,
     super.origin,
   }) : super(
           operation: operation,
@@ -35,6 +32,7 @@ class SentryTransactionContext extends SentrySpanContext {
     SentryBaggage? baggage,
   }) {
     final sampleRate = baggage?.getSampleRate();
+    final sampleRand = baggage?.getSampleRand();
     return SentryTransactionContext(
       name,
       operation,
@@ -44,6 +42,7 @@ class SentryTransactionContext extends SentrySpanContext {
           ? SentryTracesSamplingDecision(
               traceHeader.sampled!,
               sampleRate: sampleRate,
+              sampleRand: sampleRand,
             )
           : null,
       transactionNameSource:
@@ -52,6 +51,7 @@ class SentryTransactionContext extends SentrySpanContext {
     );
   }
 
+  @Deprecated('Assign values directly to the instance.')
   SentryTransactionContext copyWith({
     String? name,
     String? operation,

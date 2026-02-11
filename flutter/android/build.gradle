@@ -34,8 +34,8 @@ android {
     }
 
     defaultConfig {
-        minSdkVersion 19
-        targetSdkVersion 33
+        minSdkVersion 21
+        targetSdkVersion 34
 
         ndk {
             // Flutter does not currently support building for x86 Android (See Issue 9253).
@@ -55,12 +55,12 @@ android {
     }
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_1_8
-        languageVersion = "1.6"
+        languageVersion = "1.8"
     }
 }
 
 dependencies {
-    api 'io.sentry:sentry-android:7.19.0'
+    api 'io.sentry:sentry-android:8.17.0'
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
 
     // Required -- JUnit 4 framework

@@ -1,3 +1,5 @@
+// ignore_for_file: invalid_use_of_internal_member
+
 import 'dart:async';
 import 'dart:ui';
 
@@ -12,23 +14,29 @@ import 'event_processor/platform_exception_event_processor.dart';
 import 'event_processor/screenshot_event_processor.dart';
 import 'event_processor/url_filter/url_filter_event_processor.dart';
 import 'event_processor/widget_event_processor.dart';
+import 'event_processor/ohos_override_event_processor.dart';
 import 'file_system_transport.dart';
 import 'flutter_exception_type_identifier.dart';
 import 'frame_callback_handler.dart';
 import 'integrations/connectivity/connectivity_integration.dart';
+import 'integrations/flutter_framework_feature_flag_integration.dart';
 import 'integrations/frames_tracking_integration.dart';
 import 'integrations/integrations.dart';
 import 'integrations/native_app_start_handler.dart';
 import 'integrations/screenshot_integration.dart';
+import 'integrations/generic_app_start_integration.dart';
+import 'integrations/web_session_integration.dart';
 import 'native/factory.dart';
 import 'native/native_scope_observer.dart';
 import 'native/ohos/sentry_ohos.dart';
 import 'native/sentry_native_binding.dart';
 import 'profiling.dart';
-import 'renderer/renderer.dart';
 import 'replay/integration.dart';
+import 'screenshot/screenshot_support.dart';
+import 'utils/platform_dispatcher_wrapper.dart';
 import 'version.dart';
 import 'view_hierarchy/view_hierarchy_integration.dart';
+import 'web/javascript_transport.dart';
 
 /// Configuration options callback
 typedef FlutterOptionsConfiguration = FutureOr<void> Function(
@@ -36,10 +44,11 @@ typedef FlutterOptionsConfiguration = FutureOr<void> Function(
 
 /// Sentry Flutter SDK main entry point
 mixin SentryFlutter {
-  /// Represents the time when the Sentry init set up has started.
+  // 简单标识当前是否使用 OHOS 原生绑定，用于平台级覆盖逻辑
   @internal
   static bool? ohosRuntime;
-  // ignore: invalid_use_of_internal_member
+  /// Represents the time when the Sentry init set up has started.
+  @internal
   static DateTime? sentrySetupStartTime;
 
   /// Initializes the Sentry Flutter SDK.
@@ -61,25 +70,23 @@ mixin SentryFlutter {
     SentryScreenshotWidget.reset();
     options ??= SentryFlutterOptions();
 
-    // ignore: invalid_use_of_internal_member
     sentrySetupStartTime ??= options.clock();
 
-    if (options.platformChecker.hasNativeIntegration) {
+    if (options.platform.supportsNativeIntegration) {
       _native = createBinding(options);
       // 如果绑定为 OHOS，则标识运行期为 OHOS
       ohosRuntime = _native is SentryNativeOhos;
     }
 
-    final platformDispatcher = PlatformDispatcher.instance;
-    final wrapper = PlatformDispatcherWrapper(platformDispatcher);
+    final wrapper = PlatformDispatcherWrapper(PlatformDispatcher.instance);
+    options.isMultiViewApp = wrapper.isMultiViewEnabled(options);
 
     // Flutter Web doesn't capture [Future] errors if using [PlatformDispatcher.onError] and not
     // the [runZonedGuarded].
     // likely due to https://github.com/flutter/flutter/issues/100277
-    final bool isOnErrorSupported =
-        !options.platformChecker.isWeb && wrapper.isOnErrorSupported(options);
+    final isOnErrorSupported = !options.platform.isWeb;
 
-    final bool isRootZone = options.platformChecker.isRootZone;
+    final bool isRootZone = options.runtimeChecker.isRootZone;
 
     // If onError is not supported and no custom zone exists, use runZonedGuarded to capture errors.
     final bool useRunZonedGuarded = !isOnErrorSupported && isRootZone;
@@ -89,8 +96,10 @@ mixin SentryFlutter {
 
     // first step is to install the native integration and set default values,
     // so we are able to capture future errors.
-    final defaultIntegrations =
-        _createDefaultIntegrations(options, isOnErrorSupported);
+    final defaultIntegrations = _createDefaultIntegrations(
+      options,
+      isOnErrorSupported,
+    );
     for (final defaultIntegration in defaultIntegrations) {
       options.addIntegration(defaultIntegration);
     }
@@ -103,16 +112,12 @@ mixin SentryFlutter {
         return optionsConfiguration(o as SentryFlutterOptions);
       },
       appRunner: appRunner,
-      // ignore: invalid_use_of_internal_member
       options: options,
-      // ignore: invalid_use_of_internal_member
       callAppRunnerInRunZonedGuarded: useRunZonedGuarded,
-      // ignore: invalid_use_of_internal_member
       runZonedGuardedOnError: runZonedGuardedOnError,
     );
 
     if (_native != null) {
-      // ignore: invalid_use_of_internal_member
       SentryNativeProfilerFactory.attachTo(Sentry.currentHub, _native!);
     }
 
@@ -127,16 +132,24 @@ mixin SentryFlutter {
     // Not all platforms have a native integration.
     if (_native != null) {
       if (_native!.supportsCaptureEnvelope) {
-        options.transport = FileSystemTransport(_native!, options);
+        if (options.platform.isWeb) {
+          options.transport = JavascriptTransport(_native!, options);
+        } else {
+          options.transport = FileSystemTransport(_native!, options);
+        }
       }
-      options.addScopeObserver(NativeScopeObserver(_native!));
+      if (!options.platform.isWeb) {
+        options.addScopeObserver(NativeScopeObserver(_native!, options));
+      }
     }
 
     options.addEventProcessor(FlutterEnricherEventProcessor(options));
     options.addEventProcessor(WidgetEventProcessor());
+    // Enforce OHOS overrides after all standard processors
+    options.addEventProcessor(const OhosOverrideEventProcessor());
     options.addEventProcessor(UrlFilterEventProcessor(options));
 
-    if (options.platformChecker.platform.isAndroid) {
+    if (options.platform.isAndroid) {
       options.addEventProcessor(
         AndroidPlatformExceptionEventProcessor(options),
       );
@@ -154,7 +167,7 @@ mixin SentryFlutter {
     bool isOnErrorSupported,
   ) {
     final integrations = <Integration>[];
-    final platformChecker = options.platformChecker;
+    final platform = options.platform;
 
     // Will call WidgetsFlutterBinding.ensureInitialized() before all other integrations.
     integrations.add(WidgetsFlutterBindingIntegration());
@@ -170,33 +183,53 @@ mixin SentryFlutter {
     // This tracks Flutter application events, such as lifecycle events.
     integrations.add(WidgetsBindingIntegration());
 
+    // Adds Flutter framework feature flags.
+    integrations.addFlutterFrameworkFeatureFlagIntegration();
+
     // The ordering here matters, as we'd like to first start the native integration.
     // That allow us to send events to the network and then the Flutter integrations.
-    // Flutter Web doesn't need that, only Android and iOS.
     final native = _native;
     if (native != null) {
-      integrations.add(NativeSdkIntegration(native));
-      if (native.supportsLoadContexts) {
-        integrations.add(LoadContextsIntegration(native));
+      // LoadReleaseIntegration needs to be executed after all the error handlers are in place.
+      // Calling a MethodChannel might result in errors.
+      // We also need to call this before the native sdk integrations so release is properly propagated.
+      integrations.add(LoadReleaseIntegration());
+      integrations.add(createSdkIntegration(native));
+      integrations.add(createLoadDebugImagesIntegration(native));
+      if (!platform.isWeb) {
+        if (native.supportsLoadContexts) {
+          integrations.add(LoadContextsIntegration(native));
+        }
+        integrations.add(FramesTrackingIntegration(native));
+        if (platform.isIOS || platform.isAndroid || platform.isMacOS || platform.isOhos) {
+          integrations.add(
+            NativeAppStartIntegration(
+              DefaultFrameCallbackHandler(),
+              NativeAppStartHandler(native),
+            ),
+          );
+        }
+        integrations.add(ReplayIntegration(native));
+      } else {
+        // Updating sessions manually is only relevant for web
+        // iOS & Android sessions are handled by the native SDKs directly
+        //
+        // Important:
+        // Complete initialization of the integration depends on the SentryNavigatorObserver
+        integrations.add(WebSessionIntegration(native));
       }
-      integrations.add(LoadImageListIntegration(native));
-      integrations.add(FramesTrackingIntegration(native));
-      integrations.add(
-        NativeAppStartIntegration(
-          DefaultFrameCallbackHandler(),
-          NativeAppStartHandler(native),
-        ),
-      );
-      integrations.add(ReplayIntegration(native));
       options.enableDartSymbolication = false;
     }
 
-    final renderer = options.rendererWrapper.getRenderer();
-    if (!platformChecker.isWeb || renderer == FlutterRenderer.canvasKit) {
+    if (platform.isWeb || platform.isLinux || platform.isWindows) {
+      integrations.add(GenericAppStartIntegration());
+    }
+
+    if (options.isScreenshotSupported) {
       integrations.add(ScreenshotIntegration());
     }
 
-    if (platformChecker.isWeb) {
+    if (platform.isWeb) {
       integrations.add(ConnectivityIntegration());
     }
 
@@ -204,11 +237,6 @@ mixin SentryFlutter {
     integrations.add(SentryViewHierarchyIntegration());
 
     integrations.add(DebugPrintIntegration());
-
-    // This is an Integration because we want to execute it after all the
-    // error handlers are in place. Calling a MethodChannel might result
-    // in errors.
-    integrations.add(LoadReleaseIntegration());
 
     return integrations;
   }
@@ -223,18 +251,6 @@ mixin SentryFlutter {
     };
   }
 
-  /// Manually set when your app finished startup. Make sure to set
-  /// [SentryFlutterOptions.autoAppStart] to false on init. The timeout duration
-  /// for this to work is 10 seconds.
-  static void setAppStartEnd(DateTime appStartEnd) {
-    // ignore: invalid_use_of_internal_member
-    final integrations = Sentry.currentHub.options.integrations
-        .whereType<NativeAppStartIntegration>();
-    for (final integration in integrations) {
-      integration.appStartEnd = appStartEnd;
-    }
-  }
-
   static void _setSdk(SentryFlutterOptions options) {
     // overwrite sdk info with current flutter sdk
     final sdk = SdkVersion(
@@ -247,25 +263,55 @@ mixin SentryFlutter {
     options.sdk = sdk;
   }
 
-  /// Reports the time it took for the screen to be fully displayed.
-  /// This requires the [SentryFlutterOptions.enableTimeToFullDisplayTracing] option to be set to `true`.
+  @Deprecated(
+      'Use reportFullyDisplayed() on a SentryDisplay instance instead. Read the TTFD documentation at https://docs.sentry.io/platforms/dart/guides/flutter/integrations/routing-instrumentation/#time-to-full-display.')
   static Future<void> reportFullyDisplayed() async {
-    // ignore: invalid_use_of_internal_member
     final options = Sentry.currentHub.options;
     if (options is SentryFlutterOptions) {
       try {
-        return options.timeToDisplayTracker.reportFullyDisplayed();
+        final transactionId = options.timeToDisplayTracker.transactionId;
+        return options.timeToDisplayTracker.reportFullyDisplayed(
+          spanId: transactionId,
+        );
       } catch (exception, stackTrace) {
-        options.logger(
+        options.log(
           SentryLevel.error,
           'Error while reporting TTFD',
           exception: exception,
           stackTrace: stackTrace,
         );
       }
-    } else {
-      return;
     }
+  }
+
+  /// Returns the current display.
+  ///
+  /// Use it to report fully displayed for a widget when using the [SentryNavigatorObserver].
+  ///
+  /// Example:
+  /// ```dart
+  /// // At the start of async work
+  /// final currentDisplay = SentryFlutter.currentDisplay;
+  ///
+  /// // After async work completes
+  /// if (currentDisplay != null) {
+  ///   currentDisplay.reportFullyDisplayed();
+  /// }
+  /// ```
+  static SentryDisplay? currentDisplay({Hub? hub}) {
+    hub ??= Sentry.currentHub;
+
+    final options = hub.options;
+    if (options is! SentryFlutterOptions) {
+      return null;
+    }
+    final transactionId = options.timeToDisplayTracker.transactionId;
+    if (transactionId == null) {
+      hub.options.log(SentryLevel.error,
+          'Could not process TTFD for screen ${SentryNavigatorObserver.currentRouteName} - transactionId should not be null');
+      return null;
+    }
+    return SentryDisplay(transactionId, hub: hub);
   }
 
   /// Pauses the app hang tracking.
@@ -291,10 +337,9 @@ mixin SentryFlutter {
   /// Uses [SentryScreenshotWidget] to capture the current screen as a
   /// [SentryAttachment].
   static Future<SentryAttachment?> captureScreenshot() async {
-    // ignore: invalid_use_of_internal_member
     final options = Sentry.currentHub.options;
     if (!SentryScreenshotWidget.isMounted) {
-      options.logger(
+      options.log(
         SentryLevel.debug,
         'SentryScreenshotWidget could not be found in the widget tree.',
       );
@@ -303,7 +348,7 @@ mixin SentryFlutter {
     final processors =
         options.eventProcessors.whereType<ScreenshotEventProcessor>();
     if (processors.isEmpty) {
-      options.logger(
+      options.log(
         SentryLevel.debug,
         'ScreenshotEventProcessor could not be found.',
       );
@@ -338,8 +383,7 @@ mixin SentryFlutter {
   }
 
   static void _logNativeIntegrationNotAvailable(String methodName) {
-    // ignore: invalid_use_of_internal_member
-    Sentry.currentHub.options.logger(
+    Sentry.currentHub.options.log(
       SentryLevel.debug,
       'Native integration is not available. Make sure SentryFlutter is initialized before accessing the $methodName API.',
     );

@@ -1,4 +1,5 @@
-import 'dart:async';
+// ignore_for_file: invalid_use_of_internal_member
+
 import 'dart:ui';
 
 import 'package:meta/meta.dart';
@@ -13,26 +14,30 @@ class NativeAppStartIntegration extends Integration<SentryFlutterOptions> {
   NativeAppStartIntegration(
       this._frameCallbackHandler, this._nativeAppStartHandler);
 
+  @internal
+  static const integrationName = 'NativeAppStart';
+
   final FrameCallbackHandler _frameCallbackHandler;
   final NativeAppStartHandler _nativeAppStartHandler;
-  DateTime? _appStartEnd;
 
-  /// This timestamp marks the end of app startup. Either set by calling
-  /// [SentryFlutter.setAppStartEnd]. The [SentryFlutterOptions.autoAppStart]
-  /// option needs to be false.
-  @internal
-  set appStartEnd(DateTime appStartEnd) {
-    _appStartEnd = appStartEnd;
-    if (!_appStartEndCompleter.isCompleted) {
-      _appStartEndCompleter.complete();
-    }
-  }
-
-  final Completer<void> _appStartEndCompleter = Completer<void>();
   bool _allowProcessing = true;
 
   @override
   void call(Hub hub, SentryFlutterOptions options) async {
+    if (!options.isTracingEnabled()) {
+      options.log(SentryLevel.info,
+          'Skipping $integrationName integration because tracing is disabled.');
+      return;
+    }
+
+    // Create context early so we have an id to refernce for reporting full display
+    final context = SentryTransactionContext(
+      'root /',
+      SentrySpanOperations.uiLoad,
+      origin: SentryTraceOrigins.autoUiTimeToDisplay,
+    );
+    options.timeToDisplayTracker.transactionId = context.spanId;
+
     void timingsCallback(List<FrameTiming> timings) async {
       if (!_allowProcessing) {
         return;
@@ -42,28 +47,16 @@ class NativeAppStartIntegration extends Integration<SentryFlutterOptions> {
       _allowProcessing = false;
 
       try {
-        DateTime? appStartEnd;
-        if (options.autoAppStart) {
-          // ignore: invalid_use_of_internal_member
-          appStartEnd = DateTime.fromMicrosecondsSinceEpoch(timings.first
-              .timestampInMicroseconds(FramePhase.rasterFinishWallTime));
-        } else if (_appStartEnd == null) {
-          await _appStartEndCompleter.future.timeout(
-            const Duration(seconds: 10),
-          );
-          appStartEnd = _appStartEnd;
-        } else {
-          appStartEnd = null;
-        }
-        if (appStartEnd != null) {
-          await _nativeAppStartHandler.call(
-            hub,
-            options,
-            appStartEnd: appStartEnd,
-          );
-        }
+        final appStartEnd = DateTime.fromMicrosecondsSinceEpoch(timings.first
+            .timestampInMicroseconds(FramePhase.rasterFinishWallTime));
+        await _nativeAppStartHandler.call(
+          hub,
+          options,
+          context: context,
+          appStartEnd: appStartEnd,
+        );
       } catch (exception, stackTrace) {
-        options.logger(
+        options.log(
           SentryLevel.error,
           'Error while capturing native app start',
           exception: exception,
@@ -78,6 +71,6 @@ class NativeAppStartIntegration extends Integration<SentryFlutterOptions> {
     }
 
     _frameCallbackHandler.addTimingsCallback(timingsCallback);
-    options.sdk.addIntegration('nativeAppStartIntegration');
+    options.sdk.addIntegration(integrationName);
   }
 }

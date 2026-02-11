@@ -1,7 +1,9 @@
 // ignore_for_file: invalid_use_of_internal_member
 
 @TestOn('vm')
-library flutter_test;
+library;
+
+import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
@@ -30,6 +32,10 @@ void main() {
 
   tearDown(() {
     SentryScreenshotWidget.reset();
+    final binding = TestWidgetsFlutterBinding.ensureInitialized();
+    for (final view in binding.platformDispatcher.views) {
+      view.resetPhysicalSize();
+    }
   });
 
   for (var supportsReplay in [true, false]) {
@@ -37,7 +43,7 @@ void main() {
         '$ReplayIntegration in options.sdk.integrations when supportsReplay=$supportsReplay',
         () {
       when(native.supportsReplay).thenReturn(supportsReplay);
-      options.experimental.replay.sessionSampleRate = 1.0;
+      options.replay.sessionSampleRate = 1.0;
       sut.call(hub, options);
       var matcher = contains(replayIntegrationName);
       matcher = supportsReplay ? matcher : isNot(matcher);
@@ -49,7 +55,7 @@ void main() {
     test(
         '$ReplayIntegration in options.sdk.integrations when sessionSampleRate=$sampleRate',
         () {
-      options.experimental.replay.sessionSampleRate = sampleRate;
+      options.replay.sessionSampleRate = sampleRate;
       sut.call(hub, options);
       var matcher = contains(replayIntegrationName);
       matcher = sampleRate > 0 ? matcher : isNot(matcher);
@@ -61,7 +67,7 @@ void main() {
     test(
         '$ReplayEventProcessor in options.EventProcessors when onErrorSampleRate=$sampleRate',
         () async {
-      options.experimental.replay.onErrorSampleRate = sampleRate;
+      options.replay.onErrorSampleRate = sampleRate;
       await sut.call(hub, options);
 
       if (sampleRate > 0) {
@@ -74,7 +80,7 @@ void main() {
   }
 
   testWidgets('Configures replay when displayed', (tester) async {
-    options.experimental.replay.sessionSampleRate = 1.0;
+    options.replay.sessionSampleRate = 1.0;
     when(native.setReplayConfig(any)).thenReturn(null);
     sut.call(hub, options);
 
@@ -84,9 +90,63 @@ void main() {
 
     final config = verify(native.setReplayConfig(captureAny)).captured.single
         as ReplayConfig;
-    expect(config.bitRate, 75000);
     expect(config.frameRate, 1);
     expect(config.width, 800);
     expect(config.height, 600);
+  });
+
+  testWidgets('Adjusts resolution based on quality', (tester) async {
+    options.replay.sessionSampleRate = 1.0;
+    options.replay.quality = SentryReplayQuality.low;
+    when(native.setReplayConfig(any)).thenReturn(null);
+    sut.call(hub, options);
+
+    TestWidgetsFlutterBinding.ensureInitialized();
+    await pumpTestElement(tester);
+    await tester.pumpAndSettle(Duration(seconds: 1));
+
+    final config = verify(native.setReplayConfig(captureAny)).captured.single
+        as ReplayConfig;
+    expect(config.width, 640);
+    expect(config.height, 480);
+  });
+
+  testWidgets(
+      'Does not call setReplayConfig again when widget size remains unchanged',
+      (tester) async {
+    options.replay.sessionSampleRate = 1.0;
+    when(native.setReplayConfig(any)).thenReturn(null);
+    sut.call(hub, options);
+
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    tester.view.physicalSize = Size(10, 20);
+    await pumpTestElement(tester);
+    await tester.pumpAndSettle(Duration(seconds: 1));
+
+    tester.view.physicalSize = Size(10, 20);
+    await pumpTestElement(tester);
+    await tester.pumpAndSettle(Duration(seconds: 1));
+
+    verify(native.setReplayConfig(any)).called(1);
+  });
+
+  testWidgets('Does call setReplayConfig again when widget size changed',
+      (tester) async {
+    options.replay.sessionSampleRate = 1.0;
+    when(native.setReplayConfig(any)).thenReturn(null);
+    sut.call(hub, options);
+
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    tester.view.physicalSize = Size(10, 20);
+    await pumpTestElement(tester);
+    await tester.pumpAndSettle(Duration(seconds: 1));
+
+    tester.view.physicalSize = Size(20, 20);
+    await pumpTestElement(tester);
+    await tester.pumpAndSettle(Duration(seconds: 1));
+
+    verify(native.setReplayConfig(any)).called(2);
   });
 }

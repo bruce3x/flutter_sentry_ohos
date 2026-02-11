@@ -3,16 +3,14 @@ import 'dart:async';
 import 'package:meta/meta.dart';
 
 import '../../sentry.dart';
-import '../metrics/local_metrics_aggregator.dart';
-
 import '../sentry_tracer.dart';
 
-typedef OnFinishedCallback = Future<void> Function({DateTime? endTimestamp});
+typedef OnFinishedCallback = Future<void> Function(
+    {DateTime? endTimestamp, Hint? hint});
 
 class SentrySpan extends ISentrySpan {
   final SentrySpanContext _context;
   DateTime? _endTimestamp;
-  Map<String, List<MetricSummary>>? _metricSummaries;
   late final DateTime _startTimestamp;
   final Hub _hub;
 
@@ -31,7 +29,6 @@ class SentrySpan extends ISentrySpan {
   SpanStatus? _status;
   final Map<String, String> _tags = {};
   OnFinishedCallback? _finishedCallback;
-  late final LocalMetricsAggregator? _localMetricsAggregator;
 
   @override
   final SentryTracesSamplingDecision? samplingDecision;
@@ -48,14 +45,12 @@ class SentrySpan extends ISentrySpan {
     _startTimestamp = startTimestamp?.toUtc() ?? _hub.options.clock();
     _finishedCallback = finishedCallback;
     _origin = _context.origin;
-    _localMetricsAggregator = _hub.options.enableSpanLocalMetricAggregation
-        ? LocalMetricsAggregator()
-        : null;
     _isRootSpan = isRootSpan;
   }
 
   @override
-  Future<void> finish({SpanStatus? status, DateTime? endTimestamp}) async {
+  Future<void> finish(
+      {SpanStatus? status, DateTime? endTimestamp, Hint? hint}) async {
     if (finished) {
       return;
     }
@@ -67,7 +62,7 @@ class SentrySpan extends ISentrySpan {
     if (endTimestamp == null) {
       endTimestamp = _hub.options.clock();
     } else if (endTimestamp.isBefore(_startTimestamp)) {
-      _hub.options.logger(
+      _hub.options.log(
         SentryLevel.warning,
         'End timestamp ($endTimestamp) cannot be before start timestamp ($_startTimestamp)',
       );
@@ -90,9 +85,9 @@ class SentrySpan extends ISentrySpan {
     if (_throwable != null) {
       _hub.setSpanContext(_throwable, this, _tracer.name);
     }
-    _metricSummaries = _localMetricsAggregator?.getSummaries();
-    await _finishedCallback?.call(endTimestamp: _endTimestamp);
-    return super.finish(status: status, endTimestamp: _endTimestamp);
+    await _finishedCallback?.call(endTimestamp: _endTimestamp, hint: hint);
+    return super
+        .finish(status: status, endTimestamp: _endTimestamp, hint: hint);
   }
 
   @override
@@ -142,7 +137,7 @@ class SentrySpan extends ISentrySpan {
     }
 
     if (startTimestamp?.isBefore(_startTimestamp) ?? false) {
-      _hub.options.logger(
+      _hub.options.log(
         SentryLevel.warning,
         "Start timestamp ($startTimestamp) cannot be before parent span's start timestamp ($_startTimestamp). Returning NoOpSpan.",
       );
@@ -180,9 +175,6 @@ class SentrySpan extends ISentrySpan {
   @override
   set origin(String? origin) => _origin = origin;
 
-  @override
-  LocalMetricsAggregator? get localMetricsAggregator => _localMetricsAggregator;
-
   Map<String, dynamic> toJson() {
     final json = _context.toJson();
     json['start_timestamp'] =
@@ -204,15 +196,6 @@ class SentrySpan extends ISentrySpan {
       json['origin'] = _origin;
     }
 
-    final metricSummariesMap = _metricSummaries?.entries ?? Iterable.empty();
-    if (metricSummariesMap.isNotEmpty) {
-      final map = <String, dynamic>{};
-      for (final entry in metricSummariesMap) {
-        final summary = entry.value.map((e) => e.toJson());
-        map[entry.key] = summary.toList(growable: false);
-      }
-      json['_metrics_summary'] = map;
-    }
     return json;
   }
 
@@ -230,9 +213,9 @@ class SentrySpan extends ISentrySpan {
   Map<String, dynamic> get data => _data;
 
   @override
-  SentryTraceHeader toSentryTrace() => SentryTraceHeader(
-        _context.traceId,
-        _context.spanId,
+  SentryTraceHeader toSentryTrace() => generateSentryTraceHeader(
+        traceId: _context.traceId,
+        spanId: _context.spanId,
         sampled: samplingDecision?.sampled,
       );
 
@@ -243,7 +226,7 @@ class SentrySpan extends ISentrySpan {
     SentryMeasurementUnit? unit,
   }) {
     if (finished) {
-      _hub.options.logger(SentryLevel.debug,
+      _hub.options.log(SentryLevel.debug,
           "The span is already finished. Measurement $name cannot be set");
       return;
     }

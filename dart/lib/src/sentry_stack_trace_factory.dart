@@ -4,14 +4,13 @@ import 'package:stack_trace/stack_trace.dart';
 import 'origin.dart';
 import 'protocol.dart';
 import 'sentry_options.dart';
+import 'utils/stacktrace_utils.dart';
 
 /// converts [StackTrace] to [SentryStackFrame]s
 class SentryStackTraceFactory {
   final SentryOptions _options;
 
-  static final _absRegex = RegExp(r'^\s*#[0-9]+ +abs +([A-Fa-f0-9]+)');
   static final _frameRegex = RegExp(r'^\s*#', multiLine: true);
-  static final _buildIdRegex = RegExp(r"build_id[:=] *'([A-Fa-f0-9]+)'");
   static final _baseAddrRegex = RegExp(r'isolate_dso_base[:=] *([A-Fa-f0-9]+)');
   static final SentryStackFrame _asynchronousGapFrameJson =
       SentryStackFrame(absPath: '<asynchronous suspension>');
@@ -91,7 +90,7 @@ class SentryStackTraceFactory {
       final chain = Chain.parse(
           startOffset == 0 ? stackTrace : stackTrace.substring(startOffset));
       final info = _StackInfo(chain.traces);
-      info.buildId = _buildIdRegex.firstMatch(stackTrace)?.group(1);
+      info.buildId = buildIdRegex.firstMatch(stackTrace)?.group(1);
       info.baseAddr = _baseAddrRegex.firstMatch(stackTrace)?.group(1);
       if (info.baseAddr != null) {
         info.baseAddr = '0x${info.baseAddr}';
@@ -111,7 +110,7 @@ class SentryStackTraceFactory {
       //     #00 abs 000000723d6346d7 _kDartIsolateSnapshotInstructions+0x1e26d7
 
       // we are only interested on the #01, 02... items which contains the 'abs' addresses.
-      final match = _absRegex.firstMatch(member);
+      final match = absRegex.firstMatch(member);
       if (match != null) {
         return SentryStackFrame(
           instructionAddr: '0x${match.group(1)!}',
@@ -123,14 +122,16 @@ class SentryStackTraceFactory {
       // We shouldn't get here. If we do, it means there's likely an issue in
       // the parsing so let's fall back and post a stack trace as is, so that at
       // least we get an indication something's wrong and are able to fix it.
-      _options.logger(
-          SentryLevel.debug, "Failed to parse stack frame: $member");
+      _options.log(SentryLevel.debug, "Failed to parse stack frame: $member");
     }
 
-    final platform = _options.platformChecker.isWeb ? 'javascript' : 'dart';
+    final platform = _options.platform.isWeb ? 'javascript' : 'dart';
     final fileName =
         frame.uri.pathSegments.isNotEmpty ? frame.uri.pathSegments.last : null;
     final abs = '$eventOrigin${_absolutePathForCrashReport(frame)}';
+
+    final includeModule =
+        frame.package != null && _options.includeModuleInStackTrace;
 
     var sentryStackFrame = SentryStackFrame(
       absPath: abs,
@@ -140,16 +141,21 @@ class SentryStackTraceFactory {
       fileName: fileName,
       package: frame.package,
       platform: platform,
+      module: includeModule
+          ? frame.uri.pathSegments
+              .sublist(0, frame.uri.pathSegments.length - 1)
+              .join('/')
+          : null,
     );
 
     final line = frame.line;
     if (line != null && line >= 0) {
-      sentryStackFrame = sentryStackFrame.copyWith(lineNo: frame.line);
+      sentryStackFrame.lineNo = frame.line;
     }
 
     final column = frame.column;
     if (column != null && column >= 0) {
-      sentryStackFrame = sentryStackFrame.copyWith(colNo: frame.column);
+      sentryStackFrame.colNo = frame.column;
     }
     return sentryStackFrame;
   }

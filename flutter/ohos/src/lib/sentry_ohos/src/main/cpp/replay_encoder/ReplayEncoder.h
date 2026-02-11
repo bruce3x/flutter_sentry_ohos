@@ -16,14 +16,13 @@
 #ifndef SENTRY_REPLAY_ENCODER_H
 #define SENTRY_REPLAY_ENCODER_H
 
-#include <native_window/external_window.h>
-
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
+#include <native_window/external_window.h>
 
 struct CodecContext;
 struct OutputBufferInfo;
@@ -34,52 +33,44 @@ struct OH_AVCodec;
 struct OH_AVFormat;
 struct NativePixelMap;
 
-// 编码输入参数结构体，用于减少函数参数个数
-// 编码输入参数结构体，用于减少 Encode 函数参数个数
-struct EncodeInputParams {
-    const void *rgba = nullptr;
-    size_t size = 0;
-    int64_t timestampMs = 0;
-    int32_t inputStride = 0;
-    int32_t inputWidth = 0;
-    int32_t inputHeight = 0;
+enum class PixelFormat : int32_t {
+    UNKNOWN = 0,
+    RGBA8888 = 1,
+    BGRA8888 = 2,
+    RGB565 = 3,
+    ARGB8888 = 4,
+    RGB888 = 5,
 };
 
-// 准备并推送输入数据参数结构体
-struct PrepareInputParams {
-    const uint8_t *rgba = nullptr;
-    size_t size = 0;
-    int32_t inputStride = 0;
-    int32_t inputWidth = 0;
-    int32_t inputHeight = 0;
-    uint32_t index = 0;
-    OH_AVBuffer *buffer = nullptr;
-    int64_t ptsUs = 0;
+struct EncodeInputInfo {
+    int32_t stride = 0;
+    int32_t width = 0;
+    int32_t height = 0;
+    int32_t pixelFormat = 1;
 };
 
-// RGBA转NV12转换参数结构体
-struct ConvertParams {
+struct Nv12ConvertInput {
     const uint8_t *rgba = nullptr;
-    size_t size = 0;
     uint8_t *dest = nullptr;
-    int32_t inputStride = 0;
-    int32_t inputWidth = 0;
-    int32_t inputHeight = 0;
+    size_t srcStride = 0;
+    int32_t copyWidth = 0;
+    int32_t copyHeight = 0;
+    PixelFormat format = PixelFormat::RGBA8888;
 };
 
 class ReplayEncoder {
 public:
     static ReplayEncoder &Instance();
 
-    bool Init(int32_t fd, int32_t width, int32_t height, int32_t fps, const std::string &mimeType);
-    bool Encode(const EncodeInputParams &params);
-    // Use void* to avoid NativePixelMap type definition issues across TUs
-    bool EncodePixelMap(void *pixelMap, int64_t timestampMs);
-
-    // Returns the input surface (OHNativeWindow*) for the encoder.
-    // Caller does NOT own the returned pointer (it belongs to the encoder).
+    bool Init(int32_t fd, int32_t width,
+              int32_t height, int32_t fps,
+              const std::string &mimeType);
+    bool Encode(const void *rgba, size_t size,
+                int64_t timestampMs,
+                const EncodeInputInfo &input = {});
+    bool EncodePixelMap(void *pixelMap,
+                        int64_t timestampMs);
     void *GetInputWindow();
-
     void Finalize();
 
 private:
@@ -91,55 +82,77 @@ private:
     struct CodecContext;
 
     void ResetState();
+    void CleanupResources();
+    void ReleaseEncoder();
+    void ReleaseMuxer();
+    void ResetMemberVariables();
+
+    bool SetupResolution(int32_t width, int32_t height);
+    void CalculateNv12Layout();
+    bool CreateMuxerTrack(int64_t bitrate);
+    bool ConfigureEncoder(int64_t bitrate);
+    bool RegisterAndStartEncoder();
+    int64_t CalculateBitrate() const;
+    bool StartMuxerAndDrainThread();
+
+    bool InitValidateParams(int32_t fd, int32_t width,
+                            int32_t height, int32_t fps);
+    bool InitSetupFdAndResolution(
+        int32_t fd, int32_t width, int32_t height,
+        int32_t fps, const std::string &mimeType);
+    bool InitCreateComponents(int64_t bitrate);
+
+    bool AcquireInputBuffer(uint32_t &index,
+                            struct OH_AVBuffer *&buf);
+    uint8_t *PrepareInputBuffer(
+        struct OH_AVBuffer *buffer);
+    bool SubmitInputBuffer(struct OH_AVBuffer *buffer,
+                           uint32_t bufIndex,
+                           int64_t ptsUs);
+    int64_t ComputePresentationTime(
+        int64_t timestampMs);
+    void LogEncodePerformance(int64_t waitUs,
+                              int64_t convertUs,
+                              int64_t pushUs,
+                              int64_t totalUs);
+
+    void SignalEndOfStream();
+    void StopEncoder();
+    void StopMuxer();
+    void WaitForEos();
+    void StopDrainThread();
+
     void DrainOutputLoop();
+    void DrainMainLoop();
+    void DrainRemainingBuffers();
+    void ProcessOutputInfo(
+        const struct OutputBufferInfo &info);
     void ApplyBackgroundPriority();
-    bool ConvertRgbaToNv12(const ConvertParams &params);
+    bool AcquireAndConvertFrame(
+        const Nv12ConvertInput &cvt,
+        int64_t ptsUs);
+    bool ConvertRgbaToNv12(
+        const Nv12ConvertInput &input);
     void HandleCodecError(int32_t errorCode);
     void HandleFormatChange();
 
-    // Init() 辅助函数
-    bool ValidateInitParams(int32_t fd, int32_t width, int32_t height, int32_t fps);
-    void CalculateAlignedDimensions(int32_t width, int32_t height);
-    void CalculateBufferSizes();
-    bool CreateMuxer(int32_t fd);
-    bool CreateEncoder(const std::string &mimeTypeCopy);
-    bool ConfigureEncoder(int64_t bitrate);
-    bool StartEncoderAndMuxer();
+    static PixelFormat ToPixelFormat(int32_t value);
 
-    // Encode() 辅助函数
-    bool ValidateEncodeInput(const EncodeInputParams &params, int32_t &realWidth,
-                             int32_t &realHeight, size_t &strideBytes);
-    bool AcquireInputBuffer(InputBufferInfo &bufferInfo, int64_t &waitTimeUs);
-    int64_t CalculatePts(int64_t timestampMs);
-    bool SubmitEncodedFrame(const InputBufferInfo &bufferInfo, int64_t ptsUs);
-    void LogEncodePerformance(int64_t waitTimeUs, int64_t convertTimeUs, int64_t totalTimeUs);
-    bool WaitForInputBuffer(uint32_t &index, OH_AVBuffer *&buffer);
-    bool PrepareAndPushInputData(const PrepareInputParams &params);
-
-    // ConvertRgbaToNv12() 辅助函数
-    void ProcessUVBlock(const uint8_t *srcRow0, const uint8_t *srcRow1, int32_t x,
-                        int32_t copyWidth, uint8_t *uvDst);
-
-    // DrainOutputLoop() 辅助函数
-    bool ProcessSingleOutputBuffer(const OutputBufferInfo &info);
-
-    // Finalize() 辅助函数
-    void SignalEndOfStream();
-    void WaitForDrainThread();
-    void StopEncoderResources();
-    void StopMuxerResources();
-
-    // ResetState() 辅助函数
-    void ReleaseEncoder();
-    void ReleaseMuxer();
-
-    static void OnCodecError(struct OH_AVCodec *codec, int32_t errorCode, void *userData);
-    static void OnCodecFormatChange(struct OH_AVCodec *codec, struct OH_AVFormat *format,
-                                    void *userData);
-    static void OnNeedInputBuffer(struct OH_AVCodec *codec, uint32_t index,
-                                  struct OH_AVBuffer *buffer, void *userData);
-    static void OnNewOutputBuffer(struct OH_AVCodec *codec, uint32_t index,
-                                  struct OH_AVBuffer *buffer, void *userData);
+    static void OnCodecError(
+        struct OH_AVCodec *codec,
+        int32_t errorCode, void *userData);
+    static void OnCodecFormatChange(
+        struct OH_AVCodec *codec,
+        struct OH_AVFormat *format,
+        void *userData);
+    static void OnNeedInputBuffer(
+        struct OH_AVCodec *codec, uint32_t index,
+        struct OH_AVBuffer *buffer,
+        void *userData);
+    static void OnNewOutputBuffer(
+        struct OH_AVCodec *codec, uint32_t index,
+        struct OH_AVBuffer *buffer,
+        void *userData);
 
 private:
     bool ready_ = false;
@@ -159,7 +172,7 @@ private:
 
     std::unique_ptr<CodecContext> context_;
     std::thread drainThread_;
-    std::atomic<bool> stopRequested_{false};
+    std::atomic<bool> stopRequested_ {false};
 
     std::vector<uint8_t> nv12Buffer_;
     size_t expectedFrameSize_ = 0;
@@ -176,4 +189,4 @@ private:
     int64_t frameDurationUs_ = 0;
 };
 
-#endif  // SENTRY_REPLAY_ENCODER_H
+#endif // SENTRY_REPLAY_ENCODER_H

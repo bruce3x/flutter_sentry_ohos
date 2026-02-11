@@ -30,7 +30,6 @@ import { User } from '../sentry/User';
 import { SentryLevel } from '../sentry/SentryLevel';
 import { SentryId } from '../sentry/SentryId';
 import { collectDeviceContext } from './Context';
-import { Installation } from './Installation';
 
 type Primitive = string | number | boolean | null | undefined;
 
@@ -168,10 +167,6 @@ export class InternalSentrySdk {
     if (scope === null) return out as Object;
     try {
       const user = scope.user || new User();
-      // 对齐 Android：如果没有 user.id，自动填充 Installation ID
-      if (!user.id) {
-        user.id = Installation.id();
-      }
       out.user = user;
       out.contexts = scope.contexts;
       out.tags = scope.tags;
@@ -362,40 +357,12 @@ export class InternalSentrySdk {
               }
             }
           }
-          if (typeVal === 'attachment' && contentType === 'image/png') {
-            const start = pos;
-            const end = Math.min(pos + lengthVal, envelopeData.byteLength);
-            const body = envelopeData.subarray(start, end);
-            try {
-              const head32 = toHex(body, 32);
-              const tail = body.byteLength >= 16 ? body.subarray(body.byteLength - 16) : body;
-              const tailHex = toHex(tail, tail.byteLength);
-              const hasIEND = body.byteLength >= 12 && body[body.byteLength - 12] === 0x00 && body[body.byteLength - 11] === 0x00 && body[body.byteLength - 10] === 0x00 && body[body.byteLength - 9] === 0x00 && body[body.byteLength - 8] === 0x49 && body[body.byteLength - 7] === 0x45 && body[body.byteLength - 6] === 0x4E && body[body.byteLength - 5] === 0x44 && body[body.byteLength - 4] === 0xAE && body[body.byteLength - 3] === 0x42 && body[body.byteLength - 2] === 0x60 && body[body.byteLength - 1] === 0x82;
-              console.info('[SentryDump2] png len=' + String(body.byteLength) + ' head32=' + head32 + ' tail16=' + tailHex + ' iend=' + String(hasIEND));
-              // 将 PNG 落盘以便人工验证
-              const dumpDir = '/data/storage/el2/base/haps/entry/files/sentry';
-              try {
-                const st = fs.statSync(dumpDir);
-                if (!st.isDirectory()) { fs.mkdirSync(dumpDir); }
-              } catch (_) { try { fs.mkdirSync(dumpDir); } catch (_) {} }
-              const eidPart = eventIdStr && eventIdStr.length > 0 ? eventIdStr : 'noeid';
-              const name = `${dumpDir}/png_dump_${eidPart}_${Date.now()}.png`;
-              const O_CREAT = 0o100; const O_TRUNC = 0o1000; const O_WRONLY = 0o1;
-              const fd = fileio.openSync(name, O_CREAT | O_TRUNC | O_WRONLY, 0o666);
-              const written = fileio.writeSync(fd, body);
-              try { fileio.closeSync(fd); } catch (_) {}
-              console.info('[SentryDump2] png_dump path=' + name + ' written=' + String(typeof written === 'number' ? written : 0));
-            } catch (e) {
-              console.error('[SentryDump2] dump png failed ' + (e?.message || ''));
-            }
-            break; // 仅 dump 第一个 PNG 附件
-          }
           // 跳过 payload + LF（若存在）
           pos = pos + lengthVal;
           if (pos < envelopeData.byteLength && envelopeData[pos] === 0x0A) pos += 1;
         }
-      } catch (e) {
-        console.error('[SentryDump2] parse envelope failed ' + (e?.message || ''));
+      } catch (_) {
+        // Parse envelope failed, continue with original data
       }
 
       // 🔍 解析 envelope 并注入完整设备上下文
@@ -429,22 +396,46 @@ export class InternalSentrySdk {
       while (i < len) { if (buf[i] === 0x0A) return i; i++; }
       return -1;
     };
-    const decodeAscii = (buf: Uint8Array, s: number, e: number): string => {
-      let out = '';
-      for (let i = s; i < e; i++) out += String.fromCharCode(buf[i] & 0xFF);
-      return out;
+    // Use util.TextDecoder for correct UTF-8 handling
+    const decodeUtf8 = (buf: Uint8Array, s: number, e: number): string => {
+      try {
+        const sub = buf.subarray(s, e);
+        const decoder = new util.TextDecoder();
+        return decoder.decode(sub);
+      } catch (_) {
+        // Fallback to ASCII if TextDecoder fails
+        let out = '';
+        for (let i = s; i < e; i++) out += String.fromCharCode(buf[i] & 0xFF);
+        return out;
+      }
     };
+    // Use util.TextEncoder for correct UTF-8 handling
     const encodeUtf8 = (str: string): Uint8Array => {
-      const arr: Array<number> = [];
-      for (let i = 0; i < str.length; i++) arr.push(str.charCodeAt(i) & 0xFF);
-      return new Uint8Array(arr);
+      try {
+        const encoder = new util.TextEncoder();
+        // encode() returns Uint8Array directly
+        return encoder.encode(str);
+      } catch (_) {
+        const arr: Array<number> = [];
+        for (let i = 0; i < str.length; i++) {
+          const code = str.charCodeAt(i);
+          if (code < 128) arr.push(code);
+          else arr.push(63); // '?' placeholder for non-ascii in fallback
+        }
+        return new Uint8Array(arr);
+      }
+    };
+    const formatUuid = (id: string): string => {
+      if (typeof id === 'string' && id.length === 32 && /^[0-9a-fA-F]{32}$/.test(id)) {
+         return id.substring(0, 8) + '-' + id.substring(8, 12) + '-' + id.substring(12, 16) + '-' + id.substring(16, 20) + '-' + id.substring(20);
+      }
+      return id;
     };
 
     try {
       // 1) 解析 envelope header
       let pos = 0;
       const headerEnd = readLineEnd(envelopeBytes, pos);
-      const headerStr = headerEnd >= 0 ? decodeAscii(envelopeBytes, pos, headerEnd) : '';
       pos = headerEnd >= 0 ? (headerEnd + 1) : envelopeBytes.byteLength;
 
       // 2) 收集设备上下文
@@ -456,7 +447,7 @@ export class InternalSentrySdk {
       while (pos < envelopeBytes.byteLength) {
         const itemHdrEnd = readLineEnd(envelopeBytes, pos);
         if (itemHdrEnd < 0) break;
-        const itemHdrStr = decodeAscii(envelopeBytes, pos, itemHdrEnd);
+        const itemHdrStr = decodeUtf8(envelopeBytes, pos, itemHdrEnd);
         pos = itemHdrEnd + 1;
 
         let eventObj: Record<string, Object> | null = null;
@@ -468,7 +459,7 @@ export class InternalSentrySdk {
             lengthVal = (typeof itemHdrObj['length'] === 'number' && itemHdrObj['length'] > 0) ? Math.floor(itemHdrObj['length'] as number) : 0;
             const payloadStart = pos;
             const payloadEnd = Math.min(payloadStart + lengthVal, envelopeBytes.byteLength);
-            const payloadStr = decodeAscii(envelopeBytes, payloadStart, payloadEnd);
+            const payloadStr = decodeUtf8(envelopeBytes, payloadStart, payloadEnd);
             eventObj = JSON.parse(payloadStr) as Record<string, Object>;
 
             // 注入设备上下文
@@ -508,6 +499,30 @@ export class InternalSentrySdk {
               console.error('[enrichEnvelope] inject release/env/dist failed: ' + (e?.message || String(e)));
             }
 
+            // Fix: Ensure contexts.replay.replay_id is formatted as UUID (hyphenated) and has 'id' field
+            // This fixes "Replay not found" when the ID comes from native layer without dashes
+            if (contexts['replay']) {
+              const replayCtx = contexts['replay'] as Record<string, Object>;
+              let rid = replayCtx['replay_id'] as string | undefined;
+              const originalRid = rid;
+              
+              // Format if 32-char hex
+              if (typeof rid === 'string' && rid.length === 32) {
+                rid = formatUuid(rid);
+                replayCtx['replay_id'] = rid as Object;
+              }
+              
+              // Ensure 'id' matches 'replay_id' (required by Sentry Web)
+              if (typeof rid === 'string' && rid.length > 0) {
+                // Check if 'id' matches
+                const existingId = replayCtx['id'] as string | undefined;
+                if (existingId !== rid) {
+                   replayCtx['id'] = rid as Object;
+                }
+              }
+              console.info(`[enrichEnvelope] Replay fix: original=${originalRid} final=${rid} hasId=${!!replayCtx['id']}`);
+            }
+
             // 重新序列化 envelope
             const enrichedPayload = JSON.stringify(eventObj);
             const enrichedPayloadBytes = encodeUtf8(enrichedPayload);
@@ -519,6 +534,8 @@ export class InternalSentrySdk {
             newPayload[destOffset] = 0x0A; // LF
 
             // 查找原始 item 的边界
+            // Note: This relies on itemHdrStr being ASCII-compatible for length calculation. 
+            // Standard Sentry headers are ASCII.
             const itemHdrStart = pos - itemHdrStr.length - 1; // item header 开始
             let originalItemEnd = payloadEnd; // payload 结束
             if (originalItemEnd < envelopeBytes.byteLength && envelopeBytes[originalItemEnd] === 0x0A) {

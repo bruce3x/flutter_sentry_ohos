@@ -1,10 +1,10 @@
 import 'dart:io';
 
-import 'package:meta/meta.dart';
-
 import '../../../sentry.dart';
 import 'enricher_event_processor.dart';
+import 'flutter_runtime.dart';
 import 'io_platform_memory.dart';
+import '../../utils/os_utils.dart';
 
 EnricherEventProcessor enricherEventProcessor(SentryOptions options) {
   return IoEnricherEventProcessor(options);
@@ -18,8 +18,9 @@ class IoEnricherEventProcessor implements EnricherEventProcessor {
 
   final SentryOptions _options;
   late final String _dartVersion = _extractDartVersion(Platform.version);
-  late final SentryOperatingSystem _os = extractOperatingSystem(
-      Platform.operatingSystem, Platform.operatingSystemVersion);
+  late final SentryOperatingSystem _os = getSentryOperatingSystem();
+  bool _fetchedTotalPhysicalMemory = false;
+  int? _totalPhysicalMemory;
 
   /// Extracts the semantic version and channel from the full version string.
   ///
@@ -36,23 +37,16 @@ class IoEnricherEventProcessor implements EnricherEventProcessor {
   }
 
   @override
-  SentryEvent? apply(SentryEvent event, Hint hint) {
-    // Amend app with current memory usage, as this is not available on native.
-    final app = _getApp(event.contexts.app);
+  Future<SentryEvent?> apply(SentryEvent event, Hint hint) async {
+    event.contexts
+      ..device = await _getDevice(event.contexts.device)
+      ..operatingSystem = _getOperatingSystem(event.contexts.operatingSystem)
+      ..runtimes = _getRuntimes(event.contexts.runtimes)
+      ..app = _getApp(event.contexts.app)
+      ..culture = _getSentryCulture(event.contexts.culture);
 
-    final contexts = event.contexts.copyWith(
-      device: _getDevice(event.contexts.device),
-      operatingSystem: _getOperatingSystem(event.contexts.operatingSystem),
-      runtimes: _getRuntimes(event.contexts.runtimes),
-      app: app,
-      culture: _getSentryCulture(event.contexts.culture),
-    );
-
-    contexts['dart_context'] = _getDartContext();
-
-    return event.copyWith(
-      contexts: contexts,
-    );
+    event.contexts['dart_context'] = _getDartContext();
+    return event;
   }
 
   List<SentryRuntime> _getRuntimes(List<SentryRuntime>? runtimes) {
@@ -63,12 +57,15 @@ class IoEnricherEventProcessor implements EnricherEventProcessor {
       version: _dartVersion,
       rawDescription: Platform.version,
     );
+    final flRuntime = flutterRuntime;
+
     if (runtimes == null) {
-      return [dartRuntime];
+      return [dartRuntime, if (flRuntime != null) flRuntime];
     }
     return [
       ...runtimes,
       dartRuntime,
+      if (flRuntime != null) flRuntime,
     ];
   }
 
@@ -78,25 +75,11 @@ class IoEnricherEventProcessor implements EnricherEventProcessor {
 
     String? executable;
     if (_options.sendDefaultPii) {
-      try {
-        // This throws sometimes for some reason
-        // https://github.com/flutter/flutter/issues/83921
-        executable = Platform.executable;
-      } catch (exception, stackTrace) {
-        _options.logger(
-          SentryLevel.error,
-          'Platform.executable couldn\'t be retrieved.',
-          exception: exception,
-          stackTrace: stackTrace,
-        );
-        if (_options.automatedTestMode) {
-          rethrow;
-        }
-      }
+      executable = Platform.executable;
     }
 
     return <String, dynamic>{
-      'compile_mode': _options.platformChecker.compileMode,
+      'compile_mode': _options.runtimeChecker.compileMode,
       if (packageConfig != null) 'package_config': packageConfig,
       // The following information could potentially contain PII
       if (_options.sendDefaultPii) ...{
@@ -109,99 +92,51 @@ class IoEnricherEventProcessor implements EnricherEventProcessor {
     };
   }
 
-  SentryDevice _getDevice(SentryDevice? device) {
-    final platformMemory = PlatformMemory(_options);
-    return (device ?? SentryDevice()).copyWith(
-      name: device?.name ?? Platform.localHostname,
-      processorCount: device?.processorCount ?? Platform.numberOfProcessors,
-      memorySize: device?.memorySize ?? platformMemory.getTotalPhysicalMemory(),
-      freeMemory: device?.freeMemory ?? platformMemory.getFreePhysicalMemory(),
-    );
+  Future<SentryDevice> _getDevice(SentryDevice? device) async {
+    device ??= SentryDevice();
+    return device
+      ..name = device.name ??
+          (_options.sendDefaultPii ? Platform.localHostname : null)
+      ..processorCount = device.processorCount ?? Platform.numberOfProcessors
+      ..memorySize = device.memorySize ?? await _getTotalPhysicalMemory()
+      ..freeMemory = device.freeMemory;
+  }
+
+  Future<int?> _getTotalPhysicalMemory() async {
+    if (!_fetchedTotalPhysicalMemory) {
+      _totalPhysicalMemory =
+          await PlatformMemory(_options).getTotalPhysicalMemory();
+      _fetchedTotalPhysicalMemory = true;
+    }
+    return _totalPhysicalMemory;
   }
 
   SentryApp _getApp(SentryApp? app) {
-    return (app ?? SentryApp()).copyWith(
-      appMemory: app?.appMemory ?? ProcessInfo.currentRss,
-    );
+    app ??= SentryApp();
+    return app..appMemory = app.appMemory ?? ProcessInfo.currentRss;
   }
 
   SentryOperatingSystem _getOperatingSystem(SentryOperatingSystem? os) {
     if (os == null) {
-      return _os.clone();
+      return SentryOperatingSystem(
+        name: _os.name,
+        version: _os.version,
+        build: _os.build,
+        kernelVersion: _os.kernelVersion,
+        rooted: _os.rooted,
+        rawDescription: _os.rawDescription,
+        theme: _os.theme,
+        unknown: _os.unknown,
+      );
     } else {
       return _os.mergeWith(os);
     }
   }
 
-  @internal
-  SentryOperatingSystem extractOperatingSystem(
-      String name, String rawDescription) {
-    RegExpMatch? match;
-    switch (name) {
-      case 'android':
-        match = _androidOsRegexp.firstMatch(rawDescription);
-        name = 'Android';
-        break;
-      case 'ios':
-        name = 'iOS';
-        match = _appleOsRegexp.firstMatch(rawDescription);
-        break;
-      case 'macos':
-        name = 'macOS';
-        match = _appleOsRegexp.firstMatch(rawDescription);
-        break;
-      case 'linux':
-        name = 'Linux';
-        match = _linuxOsRegexp.firstMatch(rawDescription);
-        break;
-      case 'windows':
-        name = 'Windows';
-        match = _windowsOsRegexp.firstMatch(rawDescription);
-        break;
-    }
-
-    return SentryOperatingSystem(
-      name: name,
-      rawDescription: rawDescription,
-      version: match?.namedGroupOrNull('version'),
-      build: match?.namedGroupOrNull('build'),
-      kernelVersion: match?.namedGroupOrNull('kernelVersion'),
-    );
-  }
-
   SentryCulture _getSentryCulture(SentryCulture? culture) {
-    return (culture ?? SentryCulture()).copyWith(
-      locale: culture?.locale ?? Platform.localeName,
-      timezone: culture?.timezone ?? DateTime.now().timeZoneName,
-    );
-  }
-}
-
-// LYA-L29 10.1.0.289(C432E7R1P5)
-// TE1A.220922.010
-final _androidOsRegexp = RegExp('^(?<build>.*)\$', caseSensitive: false);
-
-// Linux 5.11.0-1018-gcp #20~20.04.2-Ubuntu SMP Fri Sep 3 01:01:37 UTC 2021
-final _linuxOsRegexp = RegExp(
-    '(?<kernelVersion>[a-z0-9+.\\-]+) (?<build>#.*)\$',
-    caseSensitive: false);
-
-// Version 14.5 (Build 18E182)
-final _appleOsRegexp = RegExp(
-    '(?<version>[a-z0-9+.\\-]+)( \\(Build (?<build>[a-z0-9+.\\-]+))\\)?\$',
-    caseSensitive: false);
-
-// "Windows 10 Pro" 10.0 (Build 19043)
-final _windowsOsRegexp = RegExp(
-    ' (?<version>[a-z0-9+.\\-]+)( \\(Build (?<build>[a-z0-9+.\\-]+))\\)?\$',
-    caseSensitive: false);
-
-extension on RegExpMatch {
-  String? namedGroupOrNull(String name) {
-    if (groupNames.contains(name)) {
-      return namedGroup(name);
-    } else {
-      return null;
-    }
+    culture ??= SentryCulture();
+    return culture
+      ..locale = culture.locale ?? Platform.localeName
+      ..timezone = culture.timezone ?? DateTime.now().timeZoneName;
   }
 }

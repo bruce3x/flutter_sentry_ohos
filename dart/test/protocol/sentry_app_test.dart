@@ -65,21 +65,12 @@ void main() {
       expect(json['view_names'], ['fixture-viewName', 'fixture-viewName2']);
       expect(json['text_scale'], 2.0);
     });
-
-    test('fromJson accepts integer text_scale', () {
-      final json = Map<String, dynamic>.from(sentryAppJson)
-        ..['text_scale'] = 1;
-
-      final sentryApp = SentryApp.fromJson(json);
-
-      expect(sentryApp.textScale, 1.0);
-    });
   });
 
   group('copyWith', () {
     test('copyWith keeps unchanged', () {
       final data = sentryApp;
-
+      // ignore: deprecated_member_use_from_same_package
       final copy = data.copyWith();
 
       expect(
@@ -92,7 +83,7 @@ void main() {
       final data = sentryApp;
 
       final startTime = DateTime.now();
-
+      // ignore: deprecated_member_use_from_same_package
       final copy = data.copyWith(
         name: 'name1',
         version: 'version1',

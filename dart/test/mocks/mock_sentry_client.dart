@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'package:sentry/sentry.dart';
-import 'package:sentry/src/metrics/metric.dart';
 
 import 'no_such_method_provider.dart';
 
@@ -9,11 +9,8 @@ class MockSentryClient with NoSuchMethodProvider implements SentryClient {
   List<CaptureMessageCall> captureMessageCalls = [];
   List<CaptureEnvelopeCall> captureEnvelopeCalls = [];
   List<CaptureTransactionCall> captureTransactionCalls = [];
-
-  // ignore: deprecated_member_use_from_same_package
-  List<SentryUserFeedback> userFeedbackCalls = [];
   List<CaptureFeedbackCall> captureFeedbackCalls = [];
-  List<Map<int, Iterable<Metric>>> captureMetricsCalls = [];
+  List<CaptureLogCall> captureLogCalls = [];
   int closeCalls = 0;
 
   @override
@@ -75,12 +72,6 @@ class MockSentryClient with NoSuchMethodProvider implements SentryClient {
   }
 
   @override
-  // ignore: deprecated_member_use_from_same_package
-  Future<void> captureUserFeedback(SentryUserFeedback userFeedback) async {
-    userFeedbackCalls.add(userFeedback);
-  }
-
-  @override
   Future<SentryId> captureFeedback(
     SentryFeedback feedback, {
     Scope? scope,
@@ -95,9 +86,8 @@ class MockSentryClient with NoSuchMethodProvider implements SentryClient {
   }
 
   @override
-  Future<SentryId> captureMetrics(Map<int, Iterable<Metric>> metrics) async {
-    captureMetricsCalls.add(metrics);
-    return SentryId.newId();
+  FutureOr<void> captureLog(SentryLog log, {Scope? scope}) async {
+    captureLogCalls.add(CaptureLogCall(log, scope));
   }
 
   @override
@@ -110,9 +100,10 @@ class MockSentryClient with NoSuchMethodProvider implements SentryClient {
     SentryTransaction transaction, {
     Scope? scope,
     SentryTraceContextHeader? traceContext,
+    Hint? hint,
   }) async {
     captureTransactionCalls
-        .add(CaptureTransactionCall(transaction, traceContext));
+        .add(CaptureTransactionCall(transaction, traceContext, hint));
     return transaction.eventId;
   }
 }
@@ -184,12 +175,14 @@ class CaptureEnvelopeCall {
 class CaptureTransactionCall {
   final SentryTransaction transaction;
   final SentryTraceContextHeader? traceContext;
+  final Hint? hint;
 
-  CaptureTransactionCall(this.transaction, this.traceContext);
+  CaptureTransactionCall(this.transaction, this.traceContext, this.hint);
 }
 
-class CaptureMetricsCall {
-  final Map<int, Iterable<Metric>> metricsBuckets;
+class CaptureLogCall {
+  final SentryLog log;
+  final Scope? scope;
 
-  CaptureMetricsCall(this.metricsBuckets);
+  CaptureLogCall(this.log, this.scope);
 }

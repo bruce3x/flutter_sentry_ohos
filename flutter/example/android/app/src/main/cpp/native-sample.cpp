@@ -13,7 +13,6 @@ JNIEXPORT void JNICALL Java_io_sentry_samples_flutter_MainActivity_crash(JNIEnv 
 }
 
 JNIEXPORT void JNICALL Java_io_sentry_samples_flutter_MainActivity_message(JNIEnv *env, jclass cls) {
-    
     sentry_value_t event = sentry_value_new_message_event(
             /*   level */ SENTRY_LEVEL_INFO,
             /*  logger */ "native",

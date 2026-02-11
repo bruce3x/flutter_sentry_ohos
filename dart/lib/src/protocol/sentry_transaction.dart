@@ -1,11 +1,10 @@
 import 'package:meta/meta.dart';
 
 import '../protocol.dart';
+import '../sentry_measurement.dart';
 import '../sentry_tracer.dart';
 import '../utils.dart';
-import '../sentry_measurement.dart';
 
-@immutable
 class SentryTransaction extends SentryEvent {
   late final DateTime startTimestamp;
   static const String _type = 'transaction';
@@ -13,7 +12,6 @@ class SentryTransaction extends SentryEvent {
   @internal
   final SentryTracer tracer;
   late final Map<String, SentryMeasurement> measurements;
-  late final Map<String, List<MetricSummary>>? metricSummaries;
   late final SentryTransactionInfo? transactionInfo;
 
   SentryTransaction(
@@ -38,7 +36,6 @@ class SentryTransaction extends SentryEvent {
     super.request,
     String? type,
     Map<String, SentryMeasurement>? measurements,
-    Map<String, List<MetricSummary>>? metricSummaries,
     SentryTransactionInfo? transactionInfo,
   }) : super(
           timestamp: timestamp ?? tracer.endTimestamp,
@@ -54,8 +51,6 @@ class SentryTransaction extends SentryEvent {
     final spanContext = tracer.context;
     spans = tracer.children;
     this.measurements = measurements ?? {};
-    this.metricSummaries =
-        metricSummaries ?? tracer.localMetricsAggregator?.getSummaries();
 
     final data = extra ?? tracer.data;
     contexts.trace = spanContext.toTraceContext(
@@ -70,6 +65,8 @@ class SentryTransaction extends SentryEvent {
 
   @override
   Map<String, dynamic> toJson() {
+    // ignore: avoid_print
+    print('[Txn.toJson] begin name=${transaction} finished=${finished} ts=${timestamp} spans=${spans.length}');
     final json = super.toJson();
 
     if (spans.isNotEmpty) {
@@ -80,10 +77,14 @@ class SentryTransaction extends SentryEvent {
         print('[Txn.toJson] spans toJson failed: $e');
       }
     }
+    // ignore: avoid_print
+    print('[Txn.toJson] start=${startTimestamp}');
     json['start_timestamp'] =
         formatDateAsIso8601WithMillisPrecision(startTimestamp);
 
     if (measurements.isNotEmpty) {
+      // ignore: avoid_print
+      print('[Txn.toJson] measurements count=${measurements.length}');
       final map = <String, dynamic>{};
       for (final item in measurements.entries) {
         try {
@@ -106,20 +107,8 @@ class SentryTransaction extends SentryEvent {
       }
     }
 
-    final metricSummariesMap = metricSummaries?.entries ?? Iterable.empty();
-    if (metricSummariesMap.isNotEmpty) {
-      final map = <String, dynamic>{};
-      for (final entry in metricSummariesMap) {
-        try {
-          final summary = entry.value.map((e) => e.toJson());
-          map[entry.key] = summary.toList(growable: false);
-        } catch (e) {
-          // ignore: avoid_print
-          print('[Txn.toJson] _metrics_summary ${entry.key} toJson failed: $e');
-        }
-      }
-      if (map.isNotEmpty) json['_metrics_summary'] = map;
-    }
+    // ignore: avoid_print
+    print('[Txn.toJson] end name=${transaction} spansOut=${(json['spans'] as List?)?.length ?? 0}');
 
     return json;
   }
@@ -128,6 +117,7 @@ class SentryTransaction extends SentryEvent {
 
   bool get sampled => contexts.trace?.sampled == true;
 
+  @Deprecated('Assign values directly to the instance.')
   @override
   SentryTransaction copyWith({
     SentryId? eventId,
@@ -159,7 +149,6 @@ class SentryTransaction extends SentryEvent {
     List<SentryThread>? threads,
     String? type,
     Map<String, SentryMeasurement>? measurements,
-    Map<String, List<MetricSummary>>? metricSummaries,
     SentryTransactionInfo? transactionInfo,
   }) =>
       SentryTransaction(
@@ -185,9 +174,6 @@ class SentryTransaction extends SentryEvent {
         type: type ?? this.type,
         measurements: (measurements != null ? Map.from(measurements) : null) ??
             this.measurements,
-        metricSummaries:
-            (metricSummaries != null ? Map.from(metricSummaries) : null) ??
-                this.metricSummaries,
         transactionInfo: transactionInfo ?? this.transactionInfo,
       );
 }

@@ -26,7 +26,6 @@ import { InternalSentrySdk } from './InternalSentrySdk';
 import { ViewHierarchyProcessor } from './ViewHierarchyProcessor';
 import common from '@ohos.app.ability.common';
 import { startReplay, stopReplay, getReplayId, captureReplayOnError as captureReplayOnErrorApi, uploadReplay as uploadReplayApi } from '../sentry_ohos_replay/api';
-import { replayInfo } from '../sentry_ohos_replay/ReplayLogger';
 import { SentryLevel } from '../sentry/SentryLevel';
 import { Sentry } from '../sentry/Sentry';
 import { Hub } from '../sentry/Hub';
@@ -39,6 +38,7 @@ import { Mechanism } from '../sentry/Mechanism';
 import { User } from '../sentry/User';
 import { SentryEvent } from '../sentry/SentryEvent';
 import { SentryTransaction } from '../sentry/SentryEvent';
+import { replayInfo } from '../sentry_ohos_replay/ReplayLogger';
 import { Breadcrumb as SdkBreadcrumb } from '../sentry/Breadcrumb';
 import { Device } from '../sentry/Device'
 import { SentryException } from '../sentry/SentryException';
@@ -239,9 +239,6 @@ export class SentryOhos {
   private static _freezeBreadcrumbsMaxKeys: number = 8;
   private static _appStartIso?: string;
   private static _frames?: FramesMonitor;
-  private static _frameTotal: number = 0;
-  private static _frameSlow: number = 0;
-  private static _frameFrozen: number = 0;
   private static _lastErrorEventId?: string;
 
   // 对外提供只读开关，供 HttpClient 等使用
@@ -347,15 +344,8 @@ export class SentryOhos {
         devMerged['brand'] = brandVal;
         devMerged['manufacturer'] = brandVal;
       }
-      if (typeof (deviceCtx['manufacturer']) === 'string') devMerged['manufacturer'] = deviceCtx['manufacturer'] as string;
-      // 电池信息
       if (typeof runtimeCtx.batteryLevel === 'number') devMerged['battery_level'] = runtimeCtx.batteryLevel as Object;
       if (typeof runtimeCtx.isCharging === 'boolean') devMerged['charging'] = runtimeCtx.isCharging as Object;
-      // 电池温度：从 deviceCtx 或 runtimeCtx 获取
-      if (typeof (deviceCtx['battery_temperature']) === 'number') {
-        devMerged['battery_temperature'] = deviceCtx['battery_temperature'] as Object;
-      }
-      // online/connectionType 推断
       if (runtimeCtx.networkType) {
         devMerged['connection_type'] = runtimeCtx.networkType as Object;
         devMerged['online'] = (runtimeCtx.networkType !== 'none') as Object;
@@ -367,71 +357,28 @@ export class SentryOhos {
       }
       const cpuCount = getProcessorCount();
       if (typeof cpuCount === 'number') devMerged['processor_count'] = cpuCount as Object;
-      // 处理器频率：优先从 runtimeCtx，回退到 deviceCtx
-      if (typeof runtimeCtx.cpuFrequencyMHz === 'number') {
-        devMerged['processor_frequency'] = runtimeCtx.cpuFrequencyMHz as Object;
-      } else if (typeof (deviceCtx['processor_frequency']) === 'number') {
-        devMerged['processor_frequency'] = deviceCtx['processor_frequency'] as Object;
-      }
-      // 屏幕信息
-      if (typeof runtimeCtx.screenDpi === 'number') devMerged['screen_dpi'] = runtimeCtx.screenDpi as Object;
-      if (typeof runtimeCtx.screenDensity === 'number') devMerged['screen_density'] = runtimeCtx.screenDensity as Object;
-      // 计算 screenResolution 字符串（对齐 Android 格式）
-      if (typeof runtimeCtx.screenWidthPx === 'number' && typeof runtimeCtx.screenHeightPx === 'number') {
-        devMerged['screen_resolution'] = `${runtimeCtx.screenWidthPx}x${runtimeCtx.screenHeightPx}` as Object;
-      }
-      // simulator
-      if (typeof (deviceCtx['simulator']) === 'boolean') devMerged['simulator'] = deviceCtx['simulator'] as Object;
-      // 语言/时区/locale
       const ltz = getLocaleTimezone();
       if (ltz.locale) devMerged['locale'] = ltz.locale as Object;
       if (ltz.language) devMerged['language'] = ltz.language as Object;
       if (ltz.timezone) devMerged['timezone'] = ltz.timezone as Object;
-
-      // ✅ 将 dev 对象的所有属性合并到 devObj
-      const devKeys = Object.keys(devMerged);
-      for (let i = 0; i < devKeys.length; i++) {
-        const key = devKeys[i];
-        const value = (devMerged as Record<string, Primitive>)[key];
-        if (value !== undefined && value !== null) {
-          devMerged[key] = value as Object;
-        }
-      }
-
-      // ✅ 添加 Android 对齐的额外字段
-      // archs：作为数组（Android 端显示为数组格式）
       if (typeof (deviceCtx['archs']) === 'string') {
-        const archsStr = deviceCtx['archs'] as string;
-        const archsArr = archsStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
-        if (archsArr.length > 0) {
-          (devMerged as Record<string, Object>)['archs'] = archsArr as Object;
-        }
+        const a = (deviceCtx['archs'] as string).split(',');
+        devMerged['archs'] = a as Object;
       }
-      // 屏幕像素值（Android 端单独显示这些字段，使用 snake_case 以对齐序列化逻辑）
-      if (typeof runtimeCtx.screenWidthPx === 'number') {
-        devMerged['screen_width_pixels'] = runtimeCtx.screenWidthPx as Object;
-      }
-      if (typeof runtimeCtx.screenHeightPx === 'number') {
-        devMerged['screen_height_pixels'] = runtimeCtx.screenHeightPx as Object;
-      }
-
-      // ✅ 使用合并后的完整对象
+      if (typeof (deviceCtx['chipset']) === 'string') devMerged['chipset'] = deviceCtx['chipset'] as Object;
       Sentry.setContext('device', devMerged as Object);
 
       const osCtx: Record<string, Primitive> = {};
       osCtx['name'] = 'OpenHarmony';
       const kernel = getKernelVersion();
-      if (kernel !== undefined) {
-        osCtx['kernelVersion'] = kernel;
-        osCtx['raw_description'] = kernel;
-      }
+      if (kernel !== undefined) osCtx['kernelVersion'] = kernel;
       if (typeof (deviceCtx['osVersion']) === 'string') osCtx['version'] = deviceCtx['osVersion'] as string;
       if (typeof (deviceCtx['build']) === 'string') osCtx['build'] = deviceCtx['build'] as string;
       if (typeof (deviceCtx['softwareModel']) === 'string') osCtx['softwareModel'] = deviceCtx['softwareModel'] as string;
       if (typeof (deviceCtx['buildFeatures']) === 'string') osCtx['buildFeatures'] = deviceCtx['buildFeatures'] as string;
+      // rooted 启发式
       const rootedMaybe = detectRooted();
       if (typeof rootedMaybe === 'boolean') osCtx['rooted'] = rootedMaybe;
-      osCtx['theme'] = 'light';
       Sentry.setContext('os', osCtx as Object);
 
       const appOut: Record<string, Primitive> = {};
@@ -664,17 +611,11 @@ export class SentryOhos {
       const osCtx: Record<string, Primitive> = {};
       osCtx['name'] = 'OpenHarmony';
       const kernel = getKernelVersion();
-      if (kernel !== undefined) {
-        osCtx['kernelVersion'] = kernel;
-        osCtx['raw_description'] = kernel;
-      }
+      if (kernel !== undefined) osCtx['kernelVersion'] = kernel;
       if (typeof (deviceCtx['osVersion']) === 'string') osCtx['version'] = deviceCtx['osVersion'] as string;
       if (typeof (deviceCtx['build']) === 'string') osCtx['build'] = deviceCtx['build'] as string;
       if (typeof (deviceCtx['softwareModel']) === 'string') osCtx['softwareModel'] = deviceCtx['softwareModel'] as string;
       if (typeof (deviceCtx['buildFeatures']) === 'string') osCtx['buildFeatures'] = deviceCtx['buildFeatures'] as string;
-      const rootedMaybe = detectRooted();
-      if (typeof rootedMaybe === 'boolean') osCtx['rooted'] = rootedMaybe;
-      osCtx['theme'] = 'light';
       event.contexts['os'] = osCtx as Object;
       // app: 对齐 Android 常用字段
       const appOut: Record<string, Primitive> = {};
@@ -859,13 +800,6 @@ export class SentryOhos {
               tm.addMeasurement('frames_total', 1, 'item');
             }
           } catch (_) {}
-          // 维护聚合计数，供插件 begin/endNativeFrames 读取
-          try {
-            const kind = b && b.data ? (b.data as Record<string, string>)['frame_kind'] : undefined;
-            SentryOhos._frameTotal += 1;
-            if (kind === 'frozen') SentryOhos._frameFrozen += 1;
-            else if (kind === 'slow') SentryOhos._frameSlow += 1;
-          } catch (_) {}
         });
         SentryOhos._frames.start();
       }
@@ -889,16 +823,16 @@ export class SentryOhos {
     } catch (_) {}
 
     installGlobalErrorHandler((error: Error) => {
-      SentryOhos.captureException(error);
-      try {
-        if (SentryOhos._options.enableReplay && SentryOhos._options.replayServerUrl && SentryOhos._baseContext) {
-          // 触发错误路径回放捕获与上传
-          captureReplayOnErrorApi(SentryOhos._baseContext).then(() => {
-            // 可选：立即上传一次（如果采用会话模式分段）
-            uploadReplayApi(SentryOhos._options.replayServerUrl as string, SentryOhos._baseContext as common.BaseContext).then(() => {}).catch(() => {});
-          }).catch(() => {});
-        }
-      } catch (_) {}
+      SentryOhos.captureException(error).then(() => {
+        try {
+          if (SentryOhos._options.enableReplay && SentryOhos._options.replayServerUrl && SentryOhos._baseContext) {
+            const replayEventId = SentryOhos._lastErrorEventId;
+            captureReplayOnErrorApi(SentryOhos._baseContext, replayEventId).then(() => {
+              uploadReplayApi(SentryOhos._options.replayServerUrl as string, SentryOhos._baseContext as common.BaseContext).then(() => {}).catch(() => {});
+            }).catch(() => {});
+          }
+        } catch (_) {}
+      }).catch(() => {});
       if (SentryOhos._session) SentryOhos._session.error();
     });
 
@@ -930,7 +864,7 @@ export class SentryOhos {
     // 启动回放：开启像素视频；500ms 一帧与 5s 一段；采样率 1.0/1.0 便于触发
     try {
       if (SentryOhos._options.enableReplay && SentryOhos._options.replayServerUrl && SentryOhos._baseContext) {
-        startReplay({ context: SentryOhos._baseContext, serverUrl: SentryOhos._options.replayServerUrl, frameIntervalMs: 500, segmentMs: 5000, maskAllImages: true, enableScreenFrames: true, sessionSampleRate: 1.0, onErrorSampleRate: 1.0 });
+        startReplay({ context: SentryOhos._baseContext, serverUrl: SentryOhos._options.replayServerUrl, frameIntervalMs: 500, segmentMs: 5000, maskAllImages: true, enableScreenFrames: true, sessionSampleRate: 0.1, onErrorSampleRate: 1.0 });
       }
     } catch (_) {}
     // 安装 HiAppEvent Watcher（APP_CRASH 补采）
@@ -986,16 +920,7 @@ export class SentryOhos {
         for (let i = 0; i < deviceKeys.length; i++) { const k = deviceKeys[i]; if (deviceCtx[k] !== undefined) devObj[k] = deviceCtx[k]; }
         (event.contexts as Record<string, Object>)['device'] = devObj as Object;
         const osCtx: Record<string, Primitive> = {}; osCtx['name'] = 'OpenHarmony';
-        const kernel = getKernelVersion();
-        if (kernel !== undefined) {
-          osCtx['kernelVersion'] = kernel;
-          osCtx['raw_description'] = kernel;
-        }
         if (typeof (deviceCtx['osVersion']) === 'string') osCtx['version'] = deviceCtx['osVersion'] as string;
-        if (typeof (deviceCtx['build']) === 'string') osCtx['build'] = deviceCtx['build'] as string;
-        const rootedMaybe = detectRooted();
-        if (typeof rootedMaybe === 'boolean') osCtx['rooted'] = rootedMaybe;
-        osCtx['theme'] = 'light';
         (event.contexts as Record<string, Object>)['os'] = osCtx as Object;
         const appOut: Record<string, Primitive> = {}; if (appCtx['appName'] !== undefined) appOut['app_name'] = appCtx['appName'] as string; appOut['in_foreground'] = SentryOhos._isInForeground;
         (event.contexts as Record<string, Object>)['app'] = appOut as Object;
@@ -1077,8 +1002,7 @@ export class SentryOhos {
     if (typeof options.lifecycleTracingTimeoutMs === 'number') out.lifecycleTracingTimeoutMs = options.lifecycleTracingTimeoutMs;
     if (typeof options.autoCommitTransactions === 'boolean') out.autoCommitTransactions = options.autoCommitTransactions;
     if (typeof options.commitTimeoutMs === 'number') out.commitTimeoutMs = options.commitTimeoutMs;
-    // 严格回退：默认关闭 HiAppWatcher（OHOS 专属能力）
-    out.enableHiAppWatcher = (options && options.enableHiAppWatcher) !== undefined ? options.enableHiAppWatcher : false;
+    out.enableHiAppWatcher = (options && options.enableHiAppWatcher) !== undefined ? options.enableHiAppWatcher : true;
     out.maxAttachmentBytes = (options && options.maxAttachmentBytes) !== undefined ? options.maxAttachmentBytes : 524288;
     out.freezeBreadcrumbsMaxKeys = (options && options.freezeBreadcrumbsMaxKeys) !== undefined ? options.freezeBreadcrumbsMaxKeys : 8;
     out.crashSampleRate = (options && options.crashSampleRate) !== undefined ? options.crashSampleRate : 1.0;
@@ -1230,12 +1154,14 @@ export class SentryOhos {
   }
 
   // 提供最近错误事件 id，便于 ReplayEnvelopeSender 注入 error_ids
-  static getLastErrorEventId(): string | undefined {
-    return SentryOhos._lastErrorEventId;
+  static registerErrorEventId(eventId?: string): void {
+    if (typeof eventId === 'string' && eventId.length > 0) {
+      SentryOhos._lastErrorEventId = eventId;
+    }
   }
 
-  static registerErrorEventId(id: string): void {
-    SentryOhos._lastErrorEventId = id;
+  static getLastErrorEventId(): string | undefined {
+    return SentryOhos._lastErrorEventId;
   }
 
   static startSpan(name: string, attrs?: Object): SpanTimer {
@@ -1553,16 +1479,12 @@ export class SentryOhos {
       o['name'] = 'OpenHarmony' as Object;
       if (typeof (deviceCtx['osVersion']) === 'string') o['version'] = deviceCtx['osVersion'] as Object;
       const kernel = getKernelVersion();
-      if (kernel) {
-        o['kernelVersion'] = kernel as Object;
-        o['raw_description'] = kernel as Object;
-      }
+      if (kernel) o['kernelVersion'] = kernel as Object;
       const rootedMaybe = detectRooted();
       if (typeof rootedMaybe === 'boolean') o['rooted'] = (rootedMaybe ? true : false) as Object;
       if (typeof (deviceCtx['build']) === 'string') o['build'] = deviceCtx['build'] as Object;
       if (typeof (deviceCtx['softwareModel']) === 'string') o['softwareModel'] = deviceCtx['softwareModel'] as Object;
       if (typeof (deviceCtx['buildFeatures']) === 'string') o['buildFeatures'] = deviceCtx['buildFeatures'] as Object;
-      o['theme'] = 'light' as Object;
       event.contexts['os'] = o as Object;
       const a: Record<string, Object> = {};
       if (typeof (appCtx['appName']) === 'string') a['app_name'] = appCtx['appName'] as Object;
@@ -1709,18 +1631,6 @@ export class SentryOhos {
     SentryOhos.setForeground(isForeground);
   }
 
-  // 提供帧计数快照（近似总数＝slow+frozen），用于插件端 begin/endNativeFrames
-  static getFramesCounters(): Object {
-    class FramesOut { total: number = 0; slow: number = 0; frozen: number = 0 }
-    const out = new FramesOut();
-    try {
-      out.total = SentryOhos._frameTotal;
-      out.slow = SentryOhos._frameSlow;
-      out.frozen = SentryOhos._frameFrozen;
-    } catch (_) {}
-    return out as Object;
-  }
-
   private static async send(payload: Envelope): Promise<void> {
     if (!SentryOhos._transport) return;
     try {
@@ -1735,7 +1645,7 @@ export class SentryOhos {
     SentryOhos._baseContext = ctx;
     try {
       if (SentryOhos._initialized && SentryOhos._options.enableReplay && SentryOhos._options.replayServerUrl) {
-        startReplay({ context: ctx, serverUrl: SentryOhos._options.replayServerUrl, frameIntervalMs: 500, segmentMs: 5000, maskAllImages: true, enableScreenFrames: true, sessionSampleRate: 1.0, onErrorSampleRate: 1.0 });
+        startReplay({ context: ctx, serverUrl: SentryOhos._options.replayServerUrl, frameIntervalMs: 500, segmentMs: 5000, maskAllImages: true, enableScreenFrames: true, sessionSampleRate: 0.1, onErrorSampleRate: 1.0 });
       }
     } catch (_) {}
     // 注册 TraceManager 自动提交钩子
@@ -1869,16 +1779,7 @@ export class SentryOhos {
 
                       const osCtx: Record<string, Primitive> = {};
                       osCtx['name'] = 'OpenHarmony';
-                      const kernel = getKernelVersion();
-                      if (kernel !== undefined) {
-                        osCtx['kernelVersion'] = kernel;
-                        osCtx['raw_description'] = kernel;
-                      }
                       if (typeof (deviceCtx['osVersion']) === 'string') osCtx['version'] = deviceCtx['osVersion'] as string;
-                      if (typeof (deviceCtx['build']) === 'string') osCtx['build'] = deviceCtx['build'] as string;
-                      const rootedMaybe = detectRooted();
-                      if (typeof rootedMaybe === 'boolean') osCtx['rooted'] = rootedMaybe;
-                      osCtx['theme'] = 'light';
                       (event.contexts as Record<string, Object>)['os'] = osCtx as Object;
 
                       const appOut: Record<string, Primitive> = {};

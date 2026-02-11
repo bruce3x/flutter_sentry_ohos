@@ -1,64 +1,122 @@
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
+import '../../sentry_flutter.dart';
 
-import '../frame_callback_handler.dart';
-import 'time_to_initial_display_tracker.dart';
-
-/// A widget that reports the Time To Initially Displayed (TTID) of its child widget.
+/// A widget that helps track when its child widget is fully displayed in a Flutter application.
 ///
-/// This widget wraps around another widget to measure and report the time it takes
-/// for the child widget to be initially displayed on the screen. This method
-/// allows a more accurate measurement than what the default TTID implementation
-/// provides. The TTID measurement begins when the route to the widget is pushed and ends
-/// when `addPostFramecallback` is triggered.
-///
-/// Wrap the widget you want to measure with [SentryDisplayWidget], and ensure that you
-/// have set up Sentry's routing instrumentation according to the Sentry documentation.
-///
+/// To report that a screen is fully displayed, call:
 /// ```dart
-/// SentryDisplayWidget(
-///   child: MyWidget(),
-/// )
+/// SentryDisplayWidget.of(context).reportFullDisplay();
 /// ```
+/// This should be called when your widget is fully rendered and ready to be displayed.
 ///
-/// Make sure to configure Sentry's routing instrumentation in your app by following
-/// the guidelines provided in Sentry's documentation for Flutter integrations:
-/// https://docs.sentry.io/platforms/flutter/integrations/routing-instrumentation/
+/// If the child is a stateless widget, report full display is called immediately.
 ///
-/// See also:
-/// - [Sentry's documentation on Flutter integrations](https://docs.sentry.io/platforms/flutter/)
-///   for more information on how to integrate Sentry into your Flutter application.
-@Deprecated(
-    'Manual TTID tracking is no longer needed - Sentry automatically tracks TTID accurately.'
-    ' You can safely remove this widget.')
+/// Example usage:
+/// ```dart
+/// class MyScreen extends StatelessWidget {
+///   @override
+///   Widget build(BuildContext context) {
+///     return SentryDisplayWidget(
+///       child: MyWidget(),
+///     );
+///   }
+/// }
+///
+/// /// Widget that executes an expensive operation
+/// class MyWidget extends StatefulWidget {
+///   const MyWidget({super.key});
+///   @override
+///   MyWidgetState createState() => MyWidgetState();
+/// }
+///
+/// class MyWidgetState extends State<MyWidget> {
+///   static const delayInSeconds = 5;
+///
+///   @override
+///   void initState() {
+///     super.initState();
+///     _doComplexOperation();
+///   }
+///
+///   /// Attach child spans to the routing transaction
+///   /// or the transaction will not be sent to Sentry.
+///   Future<void> _doComplexOperation() async {
+///     final activeTransaction = Sentry.getSpan();
+///     final childSpan = activeTransaction?.startChild(
+///       'complex operation',
+///       description: 'running a $delayInSeconds seconds operation',
+///     );
+///
+///     await Future.delayed(const Duration(seconds: delayInSeconds));
+///
+///     // Report that the widget is fully displayed after the complex operation
+///     if (mounted) {
+///       SentryDisplayWidget.of(context).reportFullyDisplayed();
+///     }
+///
+///     childSpan?.finish();
+///   }
+///
+///   @override
+///   Widget build(BuildContext context) {
+///     return const Center(
+///       child: CircularProgressIndicator(),
+///     );
+///   }
+/// }
+/// ```
 class SentryDisplayWidget extends StatefulWidget {
-  final Widget child;
-  final FrameCallbackHandler _frameCallbackHandler;
+  const SentryDisplayWidget({super.key, required this.child, Hub? hub})
+      : _hub = hub;
 
-  SentryDisplayWidget({
-    super.key,
-    required this.child,
-    @visibleForTesting FrameCallbackHandler? frameCallbackHandler,
-  }) : _frameCallbackHandler =
-            frameCallbackHandler ?? DefaultFrameCallbackHandler();
+  final Widget child;
+  final Hub? _hub;
+
+  static _SentryDisplayWidgetState of(BuildContext context) {
+    return context
+        .dependOnInheritedWidgetOfExactType<_SentryDisplayInheritedWidget>()!
+        .state;
+  }
 
   @override
-  _SentryDisplayWidgetState createState() => _SentryDisplayWidgetState();
+  State<SentryDisplayWidget> createState() => _SentryDisplayWidgetState();
 }
 
-// ignore: deprecated_member_use_from_same_package
 class _SentryDisplayWidgetState extends State<SentryDisplayWidget> {
+  SentryDisplay? _display;
+
   @override
   void initState() {
     super.initState();
-    TimeToInitialDisplayTracker().markAsManual();
-
-    widget._frameCallbackHandler.addPostFrameCallback((_) {
-      TimeToInitialDisplayTracker().completeTracking();
-    });
+    _display = SentryFlutter.currentDisplay(hub: widget._hub);
+    if (widget.child is StatelessWidget) {
+      _display?.reportFullyDisplayed();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return widget.child;
+    return _SentryDisplayInheritedWidget(
+      state: this,
+      child: widget.child,
+    );
+  }
+
+  Future<void> reportFullyDisplayed() async {
+    return _display?.reportFullyDisplayed();
+  }
+}
+
+class _SentryDisplayInheritedWidget extends InheritedWidget {
+  final _SentryDisplayWidgetState state;
+
+  const _SentryDisplayInheritedWidget({
+    required this.state,
+    required super.child,
+  });
+
+  @override
+  bool updateShouldNotify(_SentryDisplayInheritedWidget oldWidget) {
+    return state != oldWidget.state;
   }
 }

@@ -6,7 +6,8 @@ import 'package:collection/collection.dart';
 import 'package:sentry/sentry.dart';
 import 'package:sentry/src/client_reports/discard_reason.dart';
 import 'package:sentry/src/client_reports/noop_client_report_recorder.dart';
-import 'package:sentry/src/metrics/metric.dart';
+import 'package:sentry/src/event_processor/exception/exception_group_event_processor.dart';
+import 'package:sentry/src/platform/mock_platform.dart';
 import 'package:sentry/src/sentry_item_type.dart';
 import 'package:sentry/src/sentry_stack_trace_factory.dart';
 import 'package:sentry/src/sentry_tracer.dart';
@@ -16,14 +17,15 @@ import 'package:sentry/src/transport/noop_transport.dart';
 import 'package:sentry/src/transport/spotlight_http_transport.dart';
 import 'package:sentry/src/utils/iterable_utils.dart';
 import 'package:test/test.dart';
+import 'package:sentry/src/noop_log_batcher.dart';
 
 import 'mocks.dart';
 import 'mocks/mock_client_report_recorder.dart';
 import 'mocks/mock_hub.dart';
-import 'mocks/mock_platform.dart';
-import 'mocks/mock_platform_checker.dart';
 import 'mocks/mock_transport.dart';
 import 'test_utils.dart';
+import 'utils/url_details_test.dart';
+import 'mocks/mock_log_batcher.dart';
 
 void main() {
   group('SentryClient captures message', () {
@@ -258,14 +260,29 @@ void main() {
       final cause = Object();
       exception = ExceptionWithCause(cause, null);
 
-      final client = fixture.getSut();
+      final client = fixture.getSut(
+        eventProcessor: ExceptionGroupEventProcessor(fixture.options),
+      );
       await client.captureException(exception, stackTrace: null);
 
       final capturedEnvelope = (fixture.transport).envelopes.first;
       final capturedEvent = await eventFromEnvelope(capturedEnvelope);
 
-      expect(capturedEvent.exceptions?[0] is SentryException, true);
-      expect(capturedEvent.exceptions?[1] is SentryException, true);
+      expect(capturedEvent.exceptions?.length, 2);
+
+      final firstException = capturedEvent.exceptions?[0];
+      expect(firstException is SentryException, true);
+      expect(firstException?.mechanism?.source, "cause");
+      expect(firstException?.mechanism?.parentId, 0);
+      expect(firstException?.mechanism?.exceptionId, 1);
+      expect(firstException?.mechanism?.isExceptionGroup, isNull);
+
+      final secondException = capturedEvent.exceptions?[1];
+      expect(secondException is SentryException, true);
+      expect(secondException?.mechanism?.source, null);
+      expect(secondException?.mechanism?.parentId, null);
+      expect(secondException?.mechanism?.exceptionId, 0);
+      expect(secondException?.mechanism?.isExceptionGroup, isTrue);
     });
 
     test('should capture cause stacktrace', () async {
@@ -282,17 +299,20 @@ void main() {
 
       exception = ExceptionWithCause(cause, stackTrace);
 
-      final client = fixture.getSut(attachStacktrace: true);
+      final client = fixture.getSut(
+        attachStacktrace: true,
+        eventProcessor: ExceptionGroupEventProcessor(fixture.options),
+      );
       await client.captureException(exception, stackTrace: null);
 
       final capturedEnvelope = (fixture.transport).envelopes.first;
       final capturedEvent = await eventFromEnvelope(capturedEnvelope);
 
-      expect(capturedEvent.exceptions?[1].stackTrace, isNotNull);
-      expect(capturedEvent.exceptions?[1].stackTrace!.frames.first.fileName,
+      expect(capturedEvent.exceptions?[0].stackTrace, isNotNull);
+      expect(capturedEvent.exceptions?[0].stackTrace!.frames.first.fileName,
           'test.dart');
-      expect(capturedEvent.exceptions?[1].stackTrace!.frames.first.lineNo, 46);
-      expect(capturedEvent.exceptions?[1].stackTrace!.frames.first.colNo, 9);
+      expect(capturedEvent.exceptions?[0].stackTrace!.frames.first.lineNo, 46);
+      expect(capturedEvent.exceptions?[0].stackTrace!.frames.first.colNo, 9);
     });
 
     test('should capture custom stacktrace', () async {
@@ -308,7 +328,10 @@ void main() {
 
       exception = ExceptionWithStackTrace(stackTrace);
 
-      final client = fixture.getSut(attachStacktrace: true);
+      final client = fixture.getSut(
+        attachStacktrace: true,
+        eventProcessor: ExceptionGroupEventProcessor(fixture.options),
+      );
       await client.captureException(exception, stackTrace: null);
 
       final capturedEnvelope = (fixture.transport).envelopes.first;
@@ -330,13 +353,16 @@ void main() {
       final cause = Object();
       exception = ExceptionWithCause(cause, null);
 
-      final client = fixture.getSut(attachStacktrace: false);
+      final client = fixture.getSut(
+        attachStacktrace: false,
+        eventProcessor: ExceptionGroupEventProcessor(fixture.options),
+      );
       await client.captureException(exception, stackTrace: null);
 
       final capturedEnvelope = (fixture.transport).envelopes.first;
       final capturedEvent = await eventFromEnvelope(capturedEnvelope);
 
-      expect(capturedEvent.exceptions?[1].stackTrace, isNull);
+      expect(capturedEvent.exceptions?[0].stackTrace, isNull);
     });
 
     test(
@@ -349,13 +375,16 @@ void main() {
       final cause = Object();
       exception = ExceptionWithCause(cause, StackTrace.empty);
 
-      final client = fixture.getSut(attachStacktrace: false);
+      final client = fixture.getSut(
+        attachStacktrace: false,
+        eventProcessor: ExceptionGroupEventProcessor(fixture.options),
+      );
       await client.captureException(exception, stackTrace: null);
 
       final capturedEnvelope = (fixture.transport).envelopes.first;
       final capturedEvent = await eventFromEnvelope(capturedEnvelope);
 
-      expect(capturedEvent.exceptions?[1].stackTrace, isNull);
+      expect(capturedEvent.exceptions?[0].stackTrace, isNull);
     });
 
     test('should capture cause exception with Stackframe.current', () async {
@@ -366,13 +395,16 @@ void main() {
       final cause = Object();
       exception = ExceptionWithCause(cause, null);
 
-      final client = fixture.getSut(attachStacktrace: true);
+      final client = fixture.getSut(
+        attachStacktrace: true,
+        eventProcessor: ExceptionGroupEventProcessor(fixture.options),
+      );
       await client.captureException(exception, stackTrace: null);
 
       final capturedEnvelope = (fixture.transport).envelopes.first;
       final capturedEvent = await eventFromEnvelope(capturedEnvelope);
 
-      expect(capturedEvent.exceptions?[1].stackTrace, isNotNull);
+      expect(capturedEvent.exceptions?[0].stackTrace, isNotNull);
     });
 
     test('should capture sentry frames exception', () async {
@@ -389,13 +421,16 @@ void main() {
       ''';
       exception = ExceptionWithCause(cause, stackTrace);
 
-      final client = fixture.getSut(attachStacktrace: true);
+      final client = fixture.getSut(
+        attachStacktrace: true,
+        eventProcessor: ExceptionGroupEventProcessor(fixture.options),
+      );
       await client.captureException(exception, stackTrace: null);
 
       final capturedEnvelope = (fixture.transport).envelopes.first;
       final capturedEvent = await eventFromEnvelope(capturedEnvelope);
 
-      final sentryFramesCount = capturedEvent.exceptions?[1].stackTrace!.frames
+      final sentryFramesCount = capturedEvent.exceptions?[0].stackTrace!.frames
           .where((frame) => frame.package == 'sentry')
           .length;
 
@@ -612,8 +647,7 @@ void main() {
       expect(fixture.transport.envelopes.length, 1);
       expect(
           scopePropagationContext.traceId, sentryEvent.contexts.trace!.traceId);
-      expect(
-          scopePropagationContext.spanId, sentryEvent.contexts.trace!.spanId);
+      // not checking for span id as it should be a new generated random span id
     });
 
     test('keeps existing trace context if already present', () async {
@@ -645,8 +679,6 @@ void main() {
       expect(spanContext.spanId, isNot(sentryEvent.contexts.trace!.spanId));
       expect(propagationContext.traceId,
           isNot(sentryEvent.contexts.trace!.traceId));
-      expect(
-          propagationContext.spanId, isNot(sentryEvent.contexts.trace!.spanId));
     });
 
     test(
@@ -886,36 +918,27 @@ void main() {
       expect(capturedEvent.level!.name, SentryLevel.error.name);
       expect(capturedEvent.transaction, transaction);
       expect(capturedEvent.fingerprint, fingerprint);
-      expect(capturedEvent.breadcrumbs?.first.toJson(), crumb.toJson());
+      expect(capturedEvent.breadcrumbs, isNull);
       expect(capturedEvent.tags, {
         scopeTagKey: scopeTagValue,
       });
       // ignore: deprecated_member_use_from_same_package
-      expect(capturedEvent.extra, {
-        scopeExtraKey: scopeExtraValue,
-      });
+      expect(capturedEvent.extra, isNull);
     });
   });
 
   group('SentryClient : apply partial scope to the captured event', () {
     late Fixture fixture;
 
-    final transaction = '/test/scope';
-    final eventTransaction = '/event/transaction';
-    final fingerprint = ['foo', 'bar', 'baz'];
-    final eventFingerprint = ['123', '456', '798'];
-    final user = SentryUser(id: '123');
-    final crumb = Breadcrumb(message: 'bread');
-    final eventUser = SentryUser(id: '987');
-    final eventCrumbs = [Breadcrumb(message: 'bread')];
-
-    final event = SentryEvent(
-      level: SentryLevel.warning,
-      transaction: eventTransaction,
-      user: eventUser,
-      fingerprint: eventFingerprint,
-      breadcrumbs: eventCrumbs,
-    );
+    late String transaction;
+    late String eventTransaction;
+    late List<String> fingerprint;
+    late List<String> eventFingerprint;
+    late SentryUser user;
+    late Breadcrumb crumb;
+    late SentryUser eventUser;
+    late List<Breadcrumb> eventCrumbs;
+    late SentryEvent event;
 
     Future<Scope> createScope(SentryOptions options) async {
       final scope = Scope(options)
@@ -928,6 +951,22 @@ void main() {
 
     setUp(() {
       fixture = Fixture();
+
+      transaction = '/test/scope';
+      eventTransaction = '/event/transaction';
+      fingerprint = ['foo', 'bar', 'baz'];
+      eventFingerprint = ['123', '456', '798'];
+      user = SentryUser(id: '123');
+      crumb = Breadcrumb(message: 'bread');
+      eventUser = SentryUser(id: '987');
+      eventCrumbs = [Breadcrumb(message: 'bread')];
+      event = SentryEvent(
+        level: SentryLevel.warning,
+        transaction: eventTransaction,
+        user: eventUser,
+        fingerprint: eventFingerprint,
+        breadcrumbs: eventCrumbs,
+      );
     });
 
     test('should not apply the scope to non null event fields', () async {
@@ -953,10 +992,8 @@ void main() {
 
       await scope.setUser(SentryUser(id: '987'));
 
-      var eventWithUser = event.copyWith(
-        user: SentryUser(id: '123', username: 'foo bar'),
-      );
-      await client.captureEvent(eventWithUser, scope: scope);
+      event.user = SentryUser(id: '123', username: 'foo bar');
+      await client.captureEvent(event, scope: scope);
 
       final capturedEnvelope = fixture.transport.envelopes.first;
       final capturedEvent = await eventFromEnvelope(capturedEnvelope);
@@ -984,16 +1021,14 @@ void main() {
         ),
       );
 
-      var eventWithUser = event.copyWith(
-        user: SentryUser(
-          id: 'id',
-          data: {
-            'foo': 'this bar is more important',
-            'event': 'Really important event'
-          },
-        ),
+      event.user = SentryUser(
+        id: 'id',
+        data: {
+          'foo': 'this bar is more important',
+          'event': 'Really important event'
+        },
       );
-      await client.captureEvent(eventWithUser, scope: scope);
+      await client.captureEvent(event, scope: scope);
 
       final capturedEnvelope = fixture.transport.envelopes.first;
       final capturedEvent = await eventFromEnvelope(capturedEnvelope);
@@ -1004,16 +1039,19 @@ void main() {
     });
   });
 
-  group('SentryClient: sets user & user ip', () {
+  group('SentryClient: user & user ip', () {
     late Fixture fixture;
+    late SentryUser fakeUser;
 
     setUp(() {
       fixture = Fixture();
+      fakeUser = getFakeUser();
     });
 
-    test('event has no user', () async {
+    test('event has no user and sendDefaultPii = true', () async {
       final client = fixture.getSut(sendDefaultPii: true);
-      var fakeEvent = SentryEvent();
+      final fakeEvent = SentryEvent();
+      expect(fakeEvent.user, isNull);
 
       await client.captureEvent(fakeEvent);
 
@@ -1022,12 +1060,28 @@ void main() {
 
       expect(fixture.transport.envelopes.length, 1);
       expect(capturedEvent.user, isNotNull);
-      expect(capturedEvent.user?.ipAddress, '{{auto}}');
+      expect(capturedEvent.user?.ipAddress, defaultIpAddress);
+    });
+
+    test('event has no user and sendDefaultPii = false', () async {
+      final client = fixture.getSut(sendDefaultPii: false);
+      var fakeEvent = SentryEvent();
+      expect(fakeEvent.user, isNull);
+
+      await client.captureEvent(fakeEvent);
+
+      final capturedEnvelope = fixture.transport.envelopes.first;
+      final capturedEvent = await eventFromEnvelope(capturedEnvelope);
+
+      expect(fixture.transport.envelopes.length, 1);
+      expect(capturedEvent.user, isNull);
     });
 
     test('event has a user with IP address', () async {
       final client = fixture.getSut(sendDefaultPii: true);
+      final fakeEvent = getFakeEvent();
 
+      expect(fakeEvent.user?.ipAddress, isNotNull);
       await client.captureEvent(fakeEvent);
 
       final capturedEnvelope = fixture.transport.envelopes.first;
@@ -1041,19 +1095,42 @@ void main() {
       expect(capturedEvent.user?.email, fakeEvent.user!.email);
     });
 
-    test('event has a user without IP address', () async {
+    test('event has a user without IP address and sendDefaultPii = true',
+        () async {
       final client = fixture.getSut(sendDefaultPii: true);
+      final fakeEvent = getFakeEvent();
+      fakeEvent.user = fakeUser;
 
-      final event = fakeEvent.copyWith(user: fakeUser);
+      expect(fakeEvent.user?.ipAddress, isNull);
 
-      await client.captureEvent(event);
+      await client.captureEvent(fakeEvent);
 
       final capturedEnvelope = fixture.transport.envelopes.first;
       final capturedEvent = await eventFromEnvelope(capturedEnvelope);
 
       expect(fixture.transport.envelopes.length, 1);
       expect(capturedEvent.user, isNotNull);
-      expect(capturedEvent.user?.ipAddress, '{{auto}}');
+      expect(capturedEvent.user?.ipAddress, defaultIpAddress);
+      expect(capturedEvent.user?.id, fakeUser.id);
+      expect(capturedEvent.user?.email, fakeUser.email);
+    });
+
+    test('event has a user without IP address and sendDefaultPii = false',
+        () async {
+      final client = fixture.getSut(sendDefaultPii: false);
+      final fakeEvent = getFakeEvent();
+      fakeEvent.user = fakeUser;
+
+      expect(fakeEvent.user?.ipAddress, isNull);
+
+      await client.captureEvent(fakeEvent);
+
+      final capturedEnvelope = fixture.transport.envelopes.first;
+      final capturedEvent = await eventFromEnvelope(capturedEnvelope);
+
+      expect(fixture.transport.envelopes.length, 1);
+      expect(capturedEvent.user, isNotNull);
+      expect(capturedEvent.user?.ipAddress, isNull);
       expect(capturedEvent.user?.id, fakeUser.id);
       expect(capturedEvent.user?.email, fakeUser.email);
     });
@@ -1061,9 +1138,11 @@ void main() {
 
   group('SentryClient sampling', () {
     late Fixture fixture;
+    late SentryEvent fakeEvent;
 
     setUp(() {
       fixture = Fixture();
+      fakeEvent = getFakeEvent();
     });
 
     test('captures event, sample rate is 100% enabled', () async {
@@ -1368,7 +1447,8 @@ void main() {
     test('thrown error is handled', () async {
       fixture.options.automatedTestMode = false;
       final exception = Exception("before send exception");
-      final beforeSendTransactionCallback = (SentryTransaction event) {
+      final beforeSendTransactionCallback =
+          (SentryTransaction event, Hint hint) {
         throw exception;
       };
 
@@ -1385,9 +1465,11 @@ void main() {
 
   group('SentryClient before send', () {
     late Fixture fixture;
+    late SentryEvent fakeEvent;
 
     setUp(() {
       fixture = Fixture();
+      fakeEvent = getFakeEvent();
     });
 
     test('before send drops event', () async {
@@ -1449,19 +1531,23 @@ void main() {
 
   group('EventProcessors', () {
     late Fixture fixture;
+    late SentryEvent fakeEvent;
 
     setUp(() {
       fixture = Fixture();
-      fixture.options.addEventProcessor(FunctionEventProcessor(
-        (event, hint) => event.copyWith(tags: {'theme': 'material'})
-          // ignore: deprecated_member_use_from_same_package
-          ..extra?['host'] = '0.0.0.1'
-          ..modules?.addAll({'core': '1.0'})
-          ..breadcrumbs?.add(Breadcrumb(message: 'processor crumb'))
-          ..fingerprint?.add('process')
-          ..sdk?.addIntegration('testIntegration')
-          ..sdk?.addPackage('test-pkg', '1.0'),
-      ));
+      fakeEvent = getFakeEvent();
+      fixture.options.addEventProcessor(FunctionEventProcessor((event, hint) {
+        event.tags = {'theme': 'material'};
+        // ignore: deprecated_member_use_from_same_package
+        event.extra?['host'] = '0.0.0.1';
+        event.modules?.addAll({'core': '1.0'});
+        event.breadcrumbs?.add(Breadcrumb(message: 'processor crumb'));
+        event.fingerprint?.add('process');
+        event.sdk?.addIntegration('testIntegration');
+        event.sdk?.addPackage('test-pkg', '1.0');
+
+        return event;
+      }));
     });
 
     test('should execute eventProcessors for event', () async {
@@ -1612,10 +1698,333 @@ void main() {
       expect(envelopeEvent?.contexts.feedback?.toJson(), feedback.toJson());
       expect(envelopeEvent?.level, SentryLevel.info);
     });
+
+    test('should cap feedback messages to max 4096 characters', () async {
+      final client = fixture.getSut();
+      final feedback = fixture.fakeFeedback();
+      feedback.message = 'a' * 4096 + 'b' * 4096;
+      await client.captureFeedback(feedback);
+
+      final capturedEnvelope = (fixture.transport).envelopes.first;
+      final capturedEvent = await eventFromEnvelope(capturedEnvelope);
+
+      expect(capturedEvent.contexts.feedback?.message, 'a' * 4096);
+    });
+  });
+
+  group('SentryClient captureLog', () {
+    late Fixture fixture;
+
+    setUp(() {
+      fixture = Fixture();
+    });
+
+    SentryLog givenLog() {
+      return SentryLog(
+        timestamp: DateTime.now(),
+        traceId: SentryId.newId(),
+        level: SentryLogLevel.info,
+        body: 'test',
+        attributes: {
+          'attribute': SentryLogAttribute.string('value'),
+        },
+      );
+    }
+
+    test('sets log batcher on options when logs are enabled', () async {
+      expect(fixture.options.logBatcher is NoopLogBatcher, true);
+
+      fixture.options.enableLogs = true;
+      fixture.getSut();
+
+      expect(fixture.options.logBatcher is NoopLogBatcher, false);
+    });
+
+    test('disabled by default', () async {
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      final log = givenLog();
+
+      await client.captureLog(log);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls, isEmpty);
+    });
+
+    test('should capture logs as envelope', () async {
+      fixture.options.enableLogs = true;
+
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      final log = givenLog();
+
+      await client.captureLog(log);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls.length, 1);
+
+      final capturedLog = mockLogBatcher.addLogCalls.first;
+
+      expect(capturedLog.traceId, log.traceId);
+      expect(capturedLog.level, log.level);
+      expect(capturedLog.body, log.body);
+      expect(capturedLog.attributes['attribute']?.value,
+          log.attributes['attribute']?.value);
+    });
+
+    test('should add additional info to attributes', () async {
+      fixture.options.enableLogs = true;
+      fixture.options.environment = 'test-environment';
+      fixture.options.release = 'test-release';
+
+      final log = givenLog();
+
+      final scope = Scope(fixture.options);
+      final span = MockSpan();
+      scope.span = span;
+
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      await client.captureLog(log, scope: scope);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls.length, 1);
+      final capturedLog = mockLogBatcher.addLogCalls.first;
+
+      expect(
+        capturedLog.attributes['sentry.sdk.name']?.value,
+        fixture.options.sdk.name,
+      );
+      expect(
+        capturedLog.attributes['sentry.sdk.name']?.type,
+        'string',
+      );
+      expect(
+        capturedLog.attributes['sentry.sdk.version']?.value,
+        fixture.options.sdk.version,
+      );
+      expect(
+        capturedLog.attributes['sentry.sdk.version']?.type,
+        'string',
+      );
+      expect(
+        capturedLog.attributes['sentry.environment']?.value,
+        fixture.options.environment,
+      );
+      expect(
+        capturedLog.attributes['sentry.environment']?.type,
+        'string',
+      );
+      expect(
+        capturedLog.attributes['sentry.release']?.value,
+        fixture.options.release,
+      );
+      expect(
+        capturedLog.attributes['sentry.release']?.type,
+        'string',
+      );
+      expect(
+        capturedLog.attributes['sentry.trace.parent_span_id']?.value,
+        span.context.spanId.toString(),
+      );
+      expect(
+        capturedLog.attributes['sentry.trace.parent_span_id']?.type,
+        'string',
+      );
+    });
+
+    test('should add user info to attributes', () async {
+      fixture.options.enableLogs = true;
+
+      final log = givenLog();
+      final scope = Scope(fixture.options);
+      final user = SentryUser(
+        id: '123',
+        email: 'test@test.com',
+        name: 'test-name',
+      );
+      await scope.setUser(user);
+
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      await client.captureLog(log, scope: scope);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls.length, 1);
+      final capturedLog = mockLogBatcher.addLogCalls.first;
+
+      expect(
+        capturedLog.attributes['user.id']?.value,
+        user.id,
+      );
+      expect(
+        capturedLog.attributes['user.id']?.type,
+        'string',
+      );
+
+      expect(
+        capturedLog.attributes['user.name']?.value,
+        user.name,
+      );
+      expect(
+        capturedLog.attributes['user.name']?.type,
+        'string',
+      );
+
+      expect(
+        capturedLog.attributes['user.email']?.value,
+        user.email,
+      );
+      expect(
+        capturedLog.attributes['user.email']?.type,
+        'string',
+      );
+    });
+
+    test('should set trace id from propagation context', () async {
+      fixture.options.enableLogs = true;
+
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      final log = givenLog();
+      final scope = Scope(fixture.options);
+
+      await client.captureLog(log, scope: scope);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls.length, 1);
+      final capturedLog = mockLogBatcher.addLogCalls.first;
+
+      expect(capturedLog.traceId, scope.propagationContext.traceId);
+    });
+
+    test(
+        '$BeforeSendLogCallback returning null drops the log and record it as lost',
+        () async {
+      fixture.options.enableLogs = true;
+      fixture.options.beforeSendLog = (log) => null;
+
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      final log = givenLog();
+
+      await client.captureLog(log);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls.length, 0);
+
+      expect(
+        fixture.recorder.discardedEvents.first.reason,
+        DiscardReason.beforeSend,
+      );
+      expect(
+        fixture.recorder.discardedEvents.first.category,
+        DataCategory.logItem,
+      );
+    });
+
+    test('$BeforeSendLogCallback returning a log modifies it', () async {
+      fixture.options.enableLogs = true;
+      fixture.options.beforeSendLog = (log) {
+        log.body = 'modified';
+        return log;
+      };
+
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      final log = givenLog();
+
+      await client.captureLog(log);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls.length, 1);
+      final capturedLog = mockLogBatcher.addLogCalls.first;
+
+      expect(capturedLog.body, 'modified');
+    });
+
+    test('$BeforeSendLogCallback returning a log async modifies it', () async {
+      fixture.options.enableLogs = true;
+      fixture.options.beforeSendLog = (log) async {
+        await Future.delayed(Duration(milliseconds: 100));
+        log.body = 'modified';
+        return log;
+      };
+
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      final log = givenLog();
+
+      await client.captureLog(log);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls.length, 1);
+      final capturedLog = mockLogBatcher.addLogCalls.first;
+
+      expect(capturedLog.body, 'modified');
+    });
+
+    test('$BeforeSendLogCallback throwing is caught', () async {
+      fixture.options.enableLogs = true;
+      fixture.options.automatedTestMode = false;
+
+      fixture.options.beforeSendLog = (log) {
+        throw Exception('test');
+      };
+
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      final log = givenLog();
+      await client.captureLog(log);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls.length, 1);
+      final capturedLog = mockLogBatcher.addLogCalls.first;
+
+      expect(capturedLog.body, 'test');
+    });
+
+    test('OnBeforeCaptureLog lifecycle event is called', () async {
+      fixture.options.enableLogs = true;
+      fixture.options.environment = 'test-environment';
+      fixture.options.release = 'test-release';
+
+      final log = givenLog();
+
+      final scope = Scope(fixture.options);
+      final span = MockSpan();
+      scope.span = span;
+
+      final client = fixture.getSut();
+      fixture.options.logBatcher = MockLogBatcher();
+
+      client.lifeCycleRegistry.registerCallback<OnBeforeCaptureLog>((event) {
+        event.log.attributes['test'] = SentryLogAttribute.string('test-value');
+      });
+
+      await client.captureLog(log, scope: scope);
+
+      final mockLogBatcher = fixture.options.logBatcher as MockLogBatcher;
+      expect(mockLogBatcher.addLogCalls.length, 1);
+      final capturedLog = mockLogBatcher.addLogCalls.first;
+
+      expect(capturedLog.attributes['test']?.value, "test-value");
+      expect(capturedLog.attributes['test']?.type, 'string');
+    });
   });
 
   group('SentryClient captures envelope', () {
     late Fixture fixture;
+    final fakeEnvelope = getFakeEnvelope();
 
     setUp(() {
       fixture = Fixture();
@@ -1674,9 +2083,11 @@ void main() {
 
   group('ClientReportRecorder', () {
     late Fixture fixture;
+    late SentryEvent fakeEvent;
 
     setUp(() {
       fixture = Fixture();
+      fakeEvent = getFakeEvent();
     });
 
     test('recorder is not noop if client reports are enabled', () async {
@@ -1738,6 +2149,17 @@ void main() {
       expect(spanCount, 4);
     });
 
+    test('record event processor dropping feedback', () async {
+      final client = fixture.getSut(eventProcessor: DropAllEventProcessor());
+      final feedback = fixture.fakeFeedback();
+      await client.captureFeedback(feedback);
+
+      expect(fixture.recorder.discardedEvents.first.category,
+          DataCategory.feedback);
+      expect(fixture.recorder.discardedEvents.first.reason,
+          DiscardReason.eventProcessor);
+    });
+
     test('record event processor dropping partially spans', () async {
       final numberOfSpansDropped = 2;
       final sut = fixture.getSut(
@@ -1767,7 +2189,7 @@ void main() {
       fixture.tracer.startChild('child2');
       fixture.tracer.startChild('child3');
 
-      fixture.options.beforeSendTransaction = (transaction) {
+      fixture.options.beforeSendTransaction = (transaction, hint) {
         if (transaction.tracer == fixture.tracer) {
           return null;
         }
@@ -1794,7 +2216,7 @@ void main() {
       fixture.tracer.startChild('child2');
       fixture.tracer.startChild('child3');
 
-      fixture.options.beforeSendTransaction = (transaction) {
+      fixture.options.beforeSendTransaction = (transaction, hint) {
         if (transaction.tracer == fixture.tracer) {
           transaction.spans
               .removeWhere((element) => element.context.operation == 'child2');
@@ -1845,6 +2267,20 @@ void main() {
           fixture.recorder.discardedEvents.first.category, DataCategory.error);
     });
 
+    test('record beforeSend dropping feedback', () async {
+      final client = fixture.getSut();
+
+      fixture.options.beforeSendFeedback = fixture.droppingBeforeSend;
+
+      final feedback = fixture.fakeFeedback();
+      await client.captureFeedback(feedback);
+
+      expect(fixture.recorder.discardedEvents.first.reason,
+          DiscardReason.beforeSend);
+      expect(fixture.recorder.discardedEvents.first.category,
+          DataCategory.feedback);
+    });
+
     test('record sample rate dropping event', () async {
       final client = fixture.getSut(sampleRate: 0.0);
 
@@ -1858,20 +2294,12 @@ void main() {
           fixture.recorder.discardedEvents.first.category, DataCategory.error);
     });
 
-    test('user feedback envelope contains dsn', () async {
-      final client = fixture.getSut();
-      final event = SentryEvent();
-      // ignore: deprecated_member_use_from_same_package
-      final feedback = SentryUserFeedback(
-        eventId: event.eventId,
-        name: 'test',
-      );
-      // ignore: deprecated_member_use_from_same_package
-      await client.captureUserFeedback(feedback);
+    test('record sample rate not dropping feedback', () async {
+      final client = fixture.getSut(sampleRate: 0.0);
 
-      final capturedEnvelope = (fixture.transport).envelopes.first;
+      await client.captureFeedback(fixture.fakeFeedback());
 
-      expect(capturedEnvelope.header.dsn, fixture.options.dsn);
+      expect(fixture.recorder.discardedEvents.isEmpty, true);
     });
   });
 
@@ -1885,9 +2313,7 @@ void main() {
     test(
         'Spotlight enabled should not set transport to SpotlightHttpTransport on iOS',
         () async {
-      fixture.options.platformChecker = MockPlatformChecker(
-        platform: MockPlatform.iOS(),
-      );
+      fixture.options.platform = MockPlatform.iOS();
       fixture.options.spotlight = Spotlight(enabled: true);
       fixture.getSut();
 
@@ -1897,9 +2323,7 @@ void main() {
     test(
         'Spotlight enabled should not set transport to SpotlightHttpTransport on macOS',
         () async {
-      fixture.options.platformChecker = MockPlatformChecker(
-        platform: MockPlatform.macOS(),
-      );
+      fixture.options.platform = MockPlatform.macOS();
       fixture.options.spotlight = Spotlight(enabled: true);
       fixture.getSut();
 
@@ -1909,9 +2333,7 @@ void main() {
     test(
         'Spotlight enabled should not set transport to SpotlightHttpTransport on Android',
         () async {
-      fixture.options.platformChecker = MockPlatformChecker(
-        platform: MockPlatform.android(),
-      );
+      fixture.options.platform = MockPlatform.android();
       fixture.options.spotlight = Spotlight(enabled: true);
       fixture.getSut();
 
@@ -1921,7 +2343,7 @@ void main() {
     test(
         'Spotlight enabled should set transport to SpotlightHttpTransport on Web',
         () async {
-      fixture.options.platformChecker = MockPlatformChecker(isWebValue: true);
+      fixture.options.platform = MockPlatform(isWeb: true);
       fixture.options.spotlight = Spotlight(enabled: true);
       fixture.getSut();
 
@@ -1931,8 +2353,7 @@ void main() {
     test(
         'Spotlight enabled should set transport to SpotlightHttpTransport on Linux',
         () async {
-      fixture.options.platformChecker =
-          MockPlatformChecker(platform: MockPlatform.linux());
+      fixture.options.platform = MockPlatform.linux();
       fixture.options.spotlight = Spotlight(enabled: true);
       fixture.getSut();
 
@@ -1942,8 +2363,7 @@ void main() {
     test(
         'Spotlight enabled should set transport to SpotlightHttpTransport on Windows',
         () async {
-      fixture.options.platformChecker =
-          MockPlatformChecker(platform: MockPlatform.windows());
+      fixture.options.platform = MockPlatform.windows();
       fixture.options.spotlight = Spotlight(enabled: true);
       fixture.getSut();
 
@@ -1953,9 +2373,11 @@ void main() {
 
   group('trace context', () {
     late Fixture fixture;
+    late SentryEvent fakeEvent;
 
     setUp(() {
       fixture = Fixture();
+      fakeEvent = getFakeEvent();
     });
 
     test('captureEvent adds trace context', () async {
@@ -2007,9 +2429,11 @@ void main() {
 
   group('Hint', () {
     late Fixture fixture;
+    late SentryEvent fakeEvent;
 
     setUp(() {
       fixture = Fixture();
+      fakeEvent = getFakeEvent();
     });
 
     test('captureEvent adds attachments from hint', () async {
@@ -2043,6 +2467,33 @@ void main() {
       );
       expect(attachmentItem?.header.attachmentType,
           SentryAttachment.typeAttachmentDefault);
+    });
+
+    test('captureTransaction hint passed to beforeSendTransaction', () async {
+      final sut = fixture.getSut();
+
+      final hint = Hint();
+      final transaction = SentryTransaction(fixture.tracer);
+
+      fixture.options.beforeSendTransaction = (bsTransaction, bsHint) async {
+        expect(hint, bsHint);
+        return bsTransaction;
+      };
+
+      await sut.captureTransaction(transaction, hint: hint);
+    });
+
+    test('captureTransaction hint passed to event processors', () async {
+      final hint = Hint();
+
+      final eventProcessor = FunctionEventProcessor((event, epHint) {
+        expect(epHint, hint);
+        return event;
+      });
+      final sut = fixture.getSut(eventProcessor: eventProcessor);
+
+      final transaction = SentryTransaction(fixture.tracer);
+      await sut.captureTransaction(transaction, hint: hint);
     });
 
     test('captureEvent adds screenshot from hint', () async {
@@ -2158,42 +2609,6 @@ void main() {
       await client.captureEvent(fakeEvent, stackTrace: StackTrace.current);
     });
   });
-
-  group('Capture metrics', () {
-    late Fixture fixture;
-
-    setUp(() {
-      fixture = Fixture();
-    });
-
-    test('metricsAggregator is set if metrics are enabled', () async {
-      final client = fixture.getSut(enableMetrics: true);
-      expect(client.metricsAggregator, isNotNull);
-    });
-
-    test('metricsAggregator is null if metrics are disabled', () async {
-      final client = fixture.getSut(enableMetrics: false);
-      expect(client.metricsAggregator, isNull);
-    });
-
-    test('captureMetrics send statsd envelope', () async {
-      final client = fixture.getSut();
-      await client.captureMetrics(fakeMetrics);
-
-      final capturedStatsd = (fixture.transport).statsdItems.first;
-      expect(capturedStatsd, isNotNull);
-    });
-
-    test('close closes metricsAggregator', () async {
-      final client = fixture.getSut();
-      client.close();
-      expect(client.metricsAggregator, isNotNull);
-      client.metricsAggregator!
-          .emit(MetricType.counter, 'key', 1, SentryMeasurementUnit.none, {});
-      // metricsAggregator is closed, so no metrics should be recorded
-      expect(client.metricsAggregator!.buckets, isEmpty);
-    });
-  });
 }
 
 Future<SentryEvent> eventFromEnvelope(SentryEnvelope envelope) async {
@@ -2233,6 +2648,7 @@ Future<SentryEvent?> asyncBeforeSendFeedbackCallbackDropEvent(
 
 SentryTransaction? beforeSendTransactionCallbackDropEvent(
   SentryTransaction event,
+  Hint hint,
 ) =>
     null;
 
@@ -2245,13 +2661,16 @@ Future<SentryEvent?> asyncBeforeSendCallbackDropEvent(
 }
 
 Future<SentryTransaction?> asyncBeforeSendTransactionCallbackDropEvent(
-    SentryEvent event) async {
+  SentryEvent event,
+  Hint hint,
+) async {
   await Future.delayed(Duration(milliseconds: 200));
   return null;
 }
 
 SentryEvent? beforeSendFeedbackCallback(SentryEvent event, Hint hint) {
-  return event.copyWith(tags: {'theme': 'material'});
+  event.tags = {'theme': 'material'};
+  return event;
 }
 
 SentryEvent? beforeSendCallback(SentryEvent event, Hint hint) {
@@ -2267,7 +2686,9 @@ SentryEvent? beforeSendCallback(SentryEvent event, Hint hint) {
 }
 
 SentryTransaction? beforeSendTransactionCallback(
-    SentryTransaction transaction) {
+  SentryTransaction transaction,
+  Hint hint,
+) {
   return transaction
     ..tags!.addAll({'theme': 'material'})
     // ignore: deprecated_member_use_from_same_package
@@ -2281,8 +2702,9 @@ class Fixture {
   final recorder = MockClientReportRecorder();
   final transport = MockTransport();
 
-  final options =
-      defaultTestOptions(MockPlatformChecker(platform: MockPlatform.iOS()));
+  final options = defaultTestOptions()
+    ..platform = MockPlatform.iOS()
+    ..groupExceptions = true;
 
   late SentryTransactionContext _context;
   late SentryTracer tracer;
@@ -2294,7 +2716,6 @@ class Fixture {
     bool sendDefaultPii = false,
     bool attachStacktrace = true,
     bool attachThreads = false,
-    bool enableMetrics = true,
     double? sampleRate,
     BeforeSendCallback? beforeSend,
     BeforeSendTransactionCallback? beforeSendTransaction,
@@ -2306,7 +2727,6 @@ class Fixture {
   }) {
     options.tracesSampleRate = 1.0;
     options.sendDefaultPii = sendDefaultPii;
-    options.enableMetrics = enableMetrics;
     options.attachStacktrace = attachStacktrace;
     options.attachThreads = attachThreads;
     options.sampleRate = sampleRate;
@@ -2314,7 +2734,7 @@ class Fixture {
     options.beforeSendTransaction = beforeSendTransaction;
     options.beforeSendFeedback = beforeSendFeedback;
     options.debug = debug;
-    options.logger = mockLogger;
+    options.log = mockLogger;
 
     if (eventProcessor != null) {
       options.addEventProcessor(eventProcessor);
@@ -2394,7 +2814,7 @@ class ExceptionWithCauseExtractor
     extends ExceptionCauseExtractor<ExceptionWithCause> {
   @override
   ExceptionCause? cause(ExceptionWithCause error) {
-    return ExceptionCause(error.cause, error.stackTrace);
+    return ExceptionCause(error.cause, error.stackTrace, source: "cause");
   }
 }
 

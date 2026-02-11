@@ -83,6 +83,10 @@ void main() {
       expect(mockRateLimiter.errorCode, 429);
       expect(mockRateLimiter.retryAfterHeader, '1');
       expect(mockRateLimiter.sentryRateLimitHeader, isNull);
+
+      expect(fixture.loggedLevel, SentryLevel.warning);
+      expect(
+          fixture.loggedMessage, 'Rate limit reached, failed to send envelope');
     });
 
     test('sentryRateLimitHeader', () async {
@@ -192,6 +196,31 @@ void main() {
       expect(spanDiscardedEvent!.quantity, 3);
     });
 
+    test('does record lost feedback for error >= 400', () async {
+      final httpMock = MockClient((http.Request request) async {
+        return http.Response('{}', 400);
+      });
+      final sut = fixture.getSut(httpMock, MockRateLimiter());
+
+      final feedback = SentryFeedback(message: 'fixture-message');
+      final feedbackEvent = SentryEvent(
+        type: 'feedback',
+        contexts: Contexts(feedback: feedback),
+        level: SentryLevel.info,
+      );
+      final envelope = SentryEnvelope.fromEvent(
+        feedbackEvent,
+        fixture.options.sdk,
+        dsn: fixture.options.dsn,
+      );
+      await sut.send(envelope);
+
+      expect(fixture.clientReportRecorder.discardedEvents.first.reason,
+          DiscardReason.networkError);
+      expect(fixture.clientReportRecorder.discardedEvents.first.category,
+          DataCategory.feedback);
+    });
+
     test('does not record lost event for error 429', () async {
       final httpMock = MockClient((http.Request request) async {
         return http.Response('{}', 429);
@@ -207,6 +236,10 @@ void main() {
       await sut.send(envelope);
 
       expect(fixture.clientReportRecorder.discardedEvents.isEmpty, isTrue);
+
+      expect(fixture.loggedLevel, SentryLevel.warning);
+      expect(
+          fixture.loggedMessage, 'Rate limit reached, failed to send envelope');
     });
 
     test('does record lost event for error >= 500', () async {
@@ -237,6 +270,8 @@ class Fixture {
   late var clientReportRecorder = MockClientReportRecorder();
 
   HttpTransport getSut(http.Client client, RateLimiter rateLimiter) {
+    options.debug = true;
+    options.log = mockLogger;
     options.httpClient = client;
     options.recorder = clientReportRecorder;
     options.clock = () {
@@ -253,5 +288,19 @@ class Fixture {
     );
     final tracer = SentryTracer(context, MockHub());
     return SentryTransaction(tracer);
+  }
+
+  SentryLevel? loggedLevel;
+  String? loggedMessage;
+
+  void mockLogger(
+    SentryLevel level,
+    String message, {
+    String? logger,
+    Object? exception,
+    StackTrace? stackTrace,
+  }) {
+    loggedLevel = level;
+    loggedMessage = message;
   }
 }

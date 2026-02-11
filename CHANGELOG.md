@@ -1,5 +1,889 @@
 # Changelog
 
+## 9.6.0
+
+Note: this release might require updating your Android Gradle Plugin version to at least `8.1.4`.
+
+### Fixes
+
+- False replay config restarts because of `ScreenshotWidgetStatus` equality issues ([#3114](https://github.com/getsentry/sentry-dart/pull/3114))
+- Debug meta not loaded for split debug info only builds ([#3104](https://github.com/getsentry/sentry-dart/pull/3104))
+- TTID/TTFD root transactions ([#3099](https://github.com/getsentry/sentry-dart/pull/3099), [#3111](https://github.com/getsentry/sentry-dart/pull/3111))
+  - Web, Linux and Windows now create a UI transaction for the root page
+  - iOS, Android now correctly create idle transactions
+  - Fixes behaviour of traceId generation and TTFD for app start
+- Directionality assertion issue in debug mode ([#3088](https://github.com/getsentry/sentry-dart/pull/3088))
+
+### Dependencies
+
+- Bump JNI from v0.14.1 to v0.14.2 ([#3075](https://github.com/getsentry/sentry-dart/pull/3075))
+- Bump Android SDK from v8.13.2 to v8.17.0 ([#2977](https://github.com/getsentry/sentry-dart/pull/2977))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#8170)
+  - [diff](https://github.com/getsentry/sentry-java/compare/8.13.2...8.17.0)
+
+### Internal
+
+- Use lifecycle hook for before send event ([#3017](https://github.com/getsentry/sentry-dart/pull/3017))
+
+## 9.6.0-beta.2
+
+### Fixes
+
+- False replay config restarts because of `ScreenshotWidgetStatus` equality issues ([#3114](https://github.com/getsentry/sentry-dart/pull/3114))
+
+## 9.6.0-beta.1
+
+### Fixes
+
+- Debug meta not loaded for split debug info only builds ([#3104](https://github.com/getsentry/sentry-dart/pull/3104))
+- TTID/TTFD root transactions ([#3099](https://github.com/getsentry/sentry-dart/pull/3099), [#3111](https://github.com/getsentry/sentry-dart/pull/3111))
+  - Web, Linux and Windows now create a UI transaction for the root page
+  - iOS, Android now correctly create idle transactions
+  - Fixes behaviour of traceId generation and TTFD for app start
+- Directionality assertion issue in debug mode ([#3088](https://github.com/getsentry/sentry-dart/pull/3088))
+
+### Dependencies
+
+- Bump JNI from v0.14.1 to v0.14.2 ([#3075](https://github.com/getsentry/sentry-dart/pull/3075))
+- Bump Android SDK from v8.13.2 to v8.17.0 ([#2977](https://github.com/getsentry/sentry-dart/pull/2977))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#8170)
+  - [diff](https://github.com/getsentry/sentry-java/compare/8.13.2...8.17.0)
+
+### Internal
+
+- Use lifecycle hook for before send event ([#3017](https://github.com/getsentry/sentry-dart/pull/3017))
+
+## 9.5.0
+
+### Features
+
+- Report Flutter framework feature flags ([#2991](https://github.com/getsentry/sentry-dart/pull/2991))
+  - Search for feature flags that are prefixed with `flutter:*`
+  - This works on Flutter builds that include [this PR](https://github.com/flutter/flutter/pull/171545)
+- Add `LoggingIntegration` support for `SentryLog` ([#3050](https://github.com/getsentry/sentry-dart/pull/3050))
+- Add `enableNewTraceOnNavigation` flag to `SentryNavigatorObserver` ([#3096](https://github.com/getsentry/sentry-dart/pull/3096))
+  - **Default:** `true`
+  - **Disable** by passing `false`, e.g.:
+    ```dart
+    SentryNavigatorObserver(enableNewTraceOnNavigation: false)
+    ```
+  - _Note: traces differ from transactions/spans — see tracing concepts [here](https://docs.sentry.io/concepts/key-terms/tracing/)_
+
+### Fixes
+
+- Ensure consistent sampling per trace ([#3079](https://github.com/getsentry/sentry-dart/pull/3079))
+
+### Enhancements
+
+- Add sampled flag in propagation context ([#3084](https://github.com/getsentry/sentry-dart/pull/3084))
+
+### Dependencies
+
+- Bump Native SDK from v0.9.0 to v0.9.1 ([#3018](https://github.com/getsentry/sentry-dart/pull/3018))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#091)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.9.0...0.9.1)
+- Bump JavaScript SDK from v9.5.0 to v9.40.0 ([#3085](https://github.com/getsentry/sentry-dart/pull/3085), [#3092](https://github.com/getsentry/sentry-dart/pull/3092))
+  - [changelog](https://github.com/getsentry/sentry-javascript/blob/develop/CHANGELOG.md#9400)
+  - [diff](https://github.com/getsentry/sentry-javascript/compare/9.5.0...9.40.0)
+
+## Internal
+
+- Automate Sentry JS SDK version updates ([#3080](https://github.com/getsentry/sentry-dart/pull/3080))
+
+## 9.4.1
+
+### Fixes
+
+- Span ids not re-generating for headers created from scope ([#3051](https://github.com/getsentry/sentry-dart/pull/3051))
+- `ScreenshotIntegration` not being added for web ([#3055](https://github.com/getsentry/sentry-dart/pull/3055))
+- `PropagationContext` not being set when `Scope` is cloned resulting in different trace ids when using `withScope` ([#3069](https://github.com/getsentry/sentry-dart/pull/3069))
+- Drift transaction rollback not executed when parent span is null ([#3062](https://github.com/getsentry/sentry-dart/pull/3062))
+
+### Enhancements
+
+- Remove `SentryTimingsCallback` and use Flutter's `TimingsCallback` instead ([#3054](https://github.com/getsentry/sentry-dart/pull/3054))
+- Remove unused native frames integration ([#3053](https://github.com/getsentry/sentry-dart/pull/3053))
+
+## 9.4.0
+
+### Fixes
+
+- SPM should use `exact` instead of `from` when defining the sentry-cocoa package ([#3065](https://github.com/getsentry/sentry-dart/pull/3065))
+- Respect ancestor text direction in `SentryScreenshotWidget` ([#3046](https://github.com/getsentry/sentry-dart/pull/3046))
+- Add additional crashpad path candidate ([#3016](https://github.com/getsentry/sentry-dart/pull/3016))
+- Replay JNI usage with `SentryFlutterPlugin` ([#3036](https://github.com/getsentry/sentry-dart/pull/3036), [#3039](https://github.com/getsentry/sentry-dart/pull/3039))
+- Do not set `isTerminating` on `captureReplay` for Android ([#3037](https://github.com/getsentry/sentry-dart/pull/3037))
+  - Previously segments might be missing on Android replays if an unhandled error happened
+
+### Dependencies
+
+- Bump Android SDK from v8.12.0 to v8.13.2 ([#3042](https://github.com/getsentry/sentry-dart/pull/3042))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#8132)
+  - [diff](https://github.com/getsentry/sentry-java/compare/8.12.0...8.13.2)
+
+## 9.4.0-beta.2
+
+### Fixes
+
+- Respect ancestor text direction in `SentryScreenshotWidget` ([#3046](https://github.com/getsentry/sentry-dart/pull/3046))
+
+## 9.4.0-beta.1
+
+### Fixes
+
+- Add additional crashpad path candidate ([#3016](https://github.com/getsentry/sentry-dart/pull/3016))
+- Replay JNI usage with `SentryFlutterPlugin` ([#3036](https://github.com/getsentry/sentry-dart/pull/3036), [#3039](https://github.com/getsentry/sentry-dart/pull/3039))
+- Do not set `isTerminating` on `captureReplay` for Android ([#3037](https://github.com/getsentry/sentry-dart/pull/3037))
+  - Previously segments might be missing on Android replays if an unhandled error happened
+
+### Dependencies
+
+- Bump Android SDK from v8.12.0 to v8.13.2 ([#3042](https://github.com/getsentry/sentry-dart/pull/3042))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#8132)
+  - [diff](https://github.com/getsentry/sentry-java/compare/8.12.0...8.13.2)
+
+## 9.3.0
+
+### Breaking Change (Tooling)
+
+- Upgrade Kotlin `languageVersion` to `1.8` ([#3032](https://github.com/getsentry/sentry-dart/pull/3032))
+  - This allows usage of the Kotlin Android Plugin `2.2.0` which requires a `languageVersion` of `1.8` or higher
+  - If you are experiencing an issue we recommend upgrading to a toolchain compatible with Kotlin `1.8` or higher
+
+### Features
+
+- SentryFeedbackWidget Improvements ([#2964](https://github.com/getsentry/sentry-dart/pull/2964))
+  - Capture a device screenshot for feedback
+  - Customize tests and required fields
+  - Customization moved from the `SentryFeedbackWidget` constructor to `SentryFlutterOptions`:
+```dart
+// configure your feedback widget
+options.feedback.showBranding = false;
+```
+
+## 9.2.0
+
+### Features
+
+- Add os and device attributes to Flutter logs ([#2978](https://github.com/getsentry/sentry-dart/pull/2978))
+- String templating for structured logs ([#3002](https://github.com/getsentry/sentry-dart/pull/3002))
+- Add user attributes to Dart/Flutter logs ([#3014](https://github.com/getsentry/sentry-dart/pull/3002))
+
+### Fixes
+
+- Fix context to native sync for sentry context types ([#3012](https://github.com/getsentry/sentry-dart/pull/3012))
+
+### Enhancements
+
+- Dont execute app start integration if tracing is disabled ([#3026](https://github.com/getsentry/sentry-dart/pull/3026))
+- Set Firebase Remote Config flags on integration initialization ([#3008](https://github.com/getsentry/sentry-dart/pull/3008))
+
+## 9.1.0
+
+### Features
+
+- Flutter Web: add debug ids to events ([#2917](https://github.com/getsentry/sentry-dart/pull/2917))
+  - This allows support for symbolication based on [debug ids](https://docs.sentry.io/platforms/javascript/sourcemaps/troubleshooting_js/debug-ids/)
+  - This only works if you use the Sentry Dart Plugin version `3.0.0` or higher
+- Improved TTID/TTFD API ([#2866](https://github.com/getsentry/sentry-dart/pull/2866))
+  - This improves the stability and consistency of TTFD reporting by introducing new APIs
+```dart
+// Prerequisite: `SentryNavigatorObserver` is set up and routes you navigate to have unique names, e.g configured via `RouteSettings`
+// Info: Stateless widgets will report TTFD automatically when wrapped with `SentryDisplayWidget` - no need to call `reportFullyDisplayed`.
+
+// Method 1: wrap your widget that you navigate to in `SentryDisplayWidget` 
+SentryDisplayWidget(child: YourWidget())
+
+// Then report TTFD after long running work (File I/O, Network) within your widget.
+@override
+void initState() {
+  super.initState();
+  // Do some long running work...
+  Future.delayed(const Duration(seconds: 3), () {
+    if (mounted) {
+      SentryDisplayWidget.of(context).reportFullyDisplayed();
+    }
+  });
+}
+
+// Method 2: use the API directly to report TTFD - this does not require wrapping your widget with `SentryDisplayWidget`:
+@override
+void initState() {
+  super.initState();
+  // Get a reference to the current display before doing work.
+  final currentDisplay = SentryFlutter.currentDisplay();
+  // Do some long running work...
+  Future.delayed(const Duration(seconds: 3), () {
+    currentDisplay?.reportFullyDisplayed();
+  });
+}
+```
+- Add `message` parameter to `captureException()` ([#2882](https://github.com/getsentry/sentry-dart/pull/2882))
+- Add module in SentryStackFrame ([#2931](https://github.com/getsentry/sentry-dart/pull/2931))
+  - Set `SentryOptions.includeModuleInStackTrace = true` to enable this. This may change grouping of exceptions.
+
+### Dependencies
+
+- Bump Cocoa SDK from v8.51.0 to v8.52.1 ([#2981](https://github.com/getsentry/sentry-dart/pull/2981))
+  - [changelog](https://github.com/getsentry/sentry-cocoa/blob/main/CHANGELOG.md#8521)
+  - [diff](https://github.com/getsentry/sentry-cocoa/compare/8.51.0...8.52.1)
+- Bump Native SDK from v0.8.4 to v0.9.0 ([#2980](https://github.com/getsentry/sentry-dart/pull/2980))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#090)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.8.4...0.9.0)
+
+### Enhancements
+
+- Only enable load debug image integration for obfuscated apps ([#2907](https://github.com/getsentry/sentry-dart/pull/2907))
+
+## 9.0.0
+
+Version 9.0.0 marks a major release of the Sentry Dart/Flutter SDKs containing breaking changes.
+
+The goal of this release is the following:
+ - Bump the minimum Dart and Flutter versions to `3.5.0` and `3.24.0` respectively
+ - Bump the minimum Android API version to 21
+ - Add interoperability with the Sentry Javascript SDK in Flutter Web for features such as release health and reporting native JS errors
+ - GA the [Session Replay](https://docs.sentry.io/product/explore/session-replay/) feature
+ - Provide feature flag support as well as [Firebase Remote Config](https://firebase.google.com/docs/remote-config) support
+ - Trim down unused and potentially confusing APIs
+
+### How To Upgrade
+
+Please carefully read through the migration guide in the Sentry docs on how to upgrade from version 8 to version 9
+ - [Dart migration guide](https://docs.sentry.io/platforms/dart/migration/#migrating-from-sentry-8x-to-sentry-9x)
+ - [Flutter migration guide](https://docs.sentry.io/platforms/dart/guides/flutter/migration/#migrating-from-sentry_flutter-8x-to-sentry_flutter-9x)
+
+### Breaking changes
+
+- Increase minimum SDK version requirements to Dart `v3.5.0` and Flutter `v3.24.0` ([#2643](https://github.com/getsentry/sentry-dart/pull/2643))
+- Update naming of `LoadImagesListIntegration` to `LoadNativeDebugImagesIntegration` ([#2833](https://github.com/getsentry/sentry-dart/pull/2833))
+- Set sentry-native backend to `crashpad` by default and `breakpad` for Windows ARM64 ([#2791](https://github.com/getsentry/sentry-dart/pull/2791))
+  - Setting the `SENTRY_NATIVE_BACKEND` environment variable will override the defaults.
+- Remove manual TTID implementation ([#2668](https://github.com/getsentry/sentry-dart/pull/2668))
+- Remove screenshot option `attachScreenshotOnlyWhenResumed` ([#2664](https://github.com/getsentry/sentry-dart/pull/2664))
+- Remove deprecated `beforeScreenshot` ([#2662](https://github.com/getsentry/sentry-dart/pull/2662))
+- Remove old user feedback api ([#2686](https://github.com/getsentry/sentry-dart/pull/2686))
+  - This is replaced by `beforeCaptureScreenshot`
+- Remove deprecated loggers ([#2685](https://github.com/getsentry/sentry-dart/pull/2685))
+- Remove user segment ([#2687](https://github.com/getsentry/sentry-dart/pull/2687))
+- Enable Sentry JS SDK native integration by default ([#2688](https://github.com/getsentry/sentry-dart/pull/2688))
+- Remove `enableTracing` ([#2695](https://github.com/getsentry/sentry-dart/pull/2695))
+- Remove `options.autoAppStart` and `setAppStartEnd` ([#2680](https://github.com/getsentry/sentry-dart/pull/2680))
+- Bump Drift min version to `2.24.0` and use `QueryInterceptor` instead of `QueryExecutor` ([#2679](https://github.com/getsentry/sentry-dart/pull/2679))
+- Add hint for transactions ([#2675](https://github.com/getsentry/sentry-dart/pull/2675))
+  - `BeforeSendTransactionCallback` now has a `Hint` parameter
+- Remove `dart:html` usage in favour of `package:web` ([#2710](https://github.com/getsentry/sentry-dart/pull/2710))
+- Remove max response body size ([#2709](https://github.com/getsentry/sentry-dart/pull/2709))
+  - Responses are now only attached if size is below ~0.15mb
+  - Responses are attached to the `Hint` object, which can be read in `beforeSend`/`beforeSendTransaction` callbacks via `hint.response`.
+  - For now, only the `dio` integration is supported.
+- Enable privacy masking for screenshots by default ([#2728](https://github.com/getsentry/sentry-dart/pull/2728))
+- Set option `anrEnabled` to `true` by default (#2878)
+- Mutable Data Classes ([#2818](https://github.com/getsentry/sentry-dart/pull/2818))
+  - Some SDK classes do not have `const` constructors anymore.
+  - The `copyWith` and `clone` methods of SDK classes were deprecated.
+```dart
+// old
+options.beforeSend = (event, hint) {
+  event = event.copyWith(release: 'my-release');
+  return event;
+}
+// new
+options.beforeSend = (event, hint) {
+  event.release = 'my-release';
+  return event;
+}
+```
+
+### Features
+
+- Sentry Structured Logs Beta ([#2919](https://github.com/getsentry/sentry-dart/pull/2919))
+  - The old `SentryLogger` has been renamed to `SdkLogCallback` and can be accessed through `options.log` now.
+  - Adds support for structured logging though `Sentry.logger`:
+```dart
+// Enable in `SentryOptions`:
+options.enableLogs = true;
+
+// Use `Sentry.logger`
+Sentry.logger.info("This is a info log.");
+Sentry.logger.warn("This is a warning log with attributes.", attributes: {
+  'string-attribute': SentryLogAttribute.string('string'),
+  'int-attribute': SentryLogAttribute.int(1),
+  'double-attribute': SentryLogAttribute.double(1.0),
+  'bool-attribute': SentryLogAttribute.bool(true),
+});
+```
+- Add support for feature flags and integration with Firebase Remote Config ([#2825](https://github.com/getsentry/sentry-dart/pull/2825), [#2837](https://github.com/getsentry/sentry-dart/pull/2837))
+```dart
+// Manually track a feature flag
+Sentry.addFeatureFlag('my-feature', true);
+
+// or use the Sentry Firebase Remote Config Integration (sentry_firebase_remote_config package is required)
+// Add the integration to automatically track feature flags from firebase remote config.
+await SentryFlutter.init(
+  (options) {
+    options.dsn = 'https://example@sentry.io/add-your-dsn-here';
+    options.addIntegration(
+      SentryFirebaseRemoteConfigIntegration(
+        firebaseRemoteConfig: yourFirebaseRemoteConfig,
+      ),
+    );
+  },
+);
+```
+- Properly generates and links trace IDs for errors and spans ([#2869](https://github.com/getsentry/sentry-dart/pull/2869), [#2861](https://github.com/getsentry/sentry-dart/pull/2861)):
+  - **With `SentryNavigatorObserver`** - each navigation event starts a new trace.
+  - **Without `SentryNavigatorObserver` on non-web platforms** - a new trace is started from app
+    lifecycle hooks.
+  - **Web without `SentryNavigatorObserver`** - the same trace ID is reused until the page is
+    refreshed or closed.
+- Add support for Flutter Web release health ([#2794](https://github.com/getsentry/sentry-dart/pull/2794))
+  - Requires using `SentryNavigatorObserver`;
+
+### Behavioral changes
+
+- Set log level to `warning` by default when `debug = true` ([#2836](https://github.com/getsentry/sentry-dart/pull/2836))
+- Set HTTP client breadcrumbs log level based on response status code ([#2847](https://github.com/getsentry/sentry-dart/pull/2847))
+  - 5xx is mapped to `SentryLevel.error`
+  - 4xx is mapped to `SentryLevel.warning`
+- Parent-child relationship for the PlatformExceptions and Cause ([#2803](https://github.com/getsentry/sentry-dart/pull/2803))
+  - Improves and more accurately represent exception groups
+  - Disabled by default as it may cause issues to group differently
+  - You can enable this feature by setting `options.groupException = true`
+
+### Improvements
+
+- Replay: improve Android native interop performance by using JNI ([#2670](https://github.com/getsentry/sentry-dart/pull/2670))
+- Align User Feedback API ([#2949](https://github.com/getsentry/sentry-dart/pull/2949))
+  - Don’t apply breadcrumbs and extras from scope to feedback events
+  - Capture session replay when processing feedback events
+  - Record `feedback` client report for dropped feedback events
+  - Record `feedback` client report for errors when using `HttpTransport`
+- Truncate feedback message to max 4096 characters ([#2954](https://github.com/getsentry/sentry-dart/pull/2954))
+- Replay: Mask RichText Widgets by default ([#2975](https://github.com/getsentry/sentry-dart/pull/2975))
+
+### Dependencies
+
+- Bump Android SDK from v7.22.4 to v8.12.0 ([#2941](https://github.com/getsentry/sentry-dart/pull/2941), [#2819](https://github.com/getsentry/sentry-dart/pull/2819), [#2831](https://github.com/getsentry/sentry-dart/pull/2831), [#2848](https://github.com/getsentry/sentry-dart/pull/2848), [#2873](https://github.com/getsentry/sentry-dart/pull/2873, [#2883](https://github.com/getsentry/sentry-dart/pull/2883)))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#890)
+  - [diff](https://github.com/getsentry/sentry-java/compare/7.22.4...8.9.0)
+- Bump Cocoa SDK from v8.46.0 to v8.51.0 ([#2820](https://github.com/getsentry/sentry-dart/pull/2820), [#2851](https://github.com/getsentry/sentry-dart/pull/2851), [#2884](https://github.com/getsentry/sentry-dart/pull/2884), [#2951](https://github.com/getsentry/sentry-dart/pull/2951)))
+  - [changelog](https://github.com/getsentry/sentry-cocoa/blob/main/CHANGELOG.md#8491)
+  - [diff](https://github.com/getsentry/sentry-cocoa/compare/8.46.0...8.49.1)
+- Bump Native SDK from v0.8.2 to v0.8.4 ([#2823](https://github.com/getsentry/sentry-dart/pull/2823), [#2872](https://github.com/getsentry/sentry-dart/pull/2872))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#084)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.8.2...0.8.4)
+- Bump jni from v0.14.0 to v0.14.1 ([#2800])(https://github.com/getsentry/sentry-dart/pull/2800)
+  - [changelog](https://github.com/dart-lang/native/blob/main/pkgs/jni/CHANGELOG.md#0141)
+  - [diff](https://github.com/dart-lang/native/compare/jnigen-v0.14.0..jnigen-v0.14.1)
+
+## 9.0.0-RC.4
+
+### Enhancements
+
+- Replay: Mask RichText Widgets ([#2975](https://github.com/getsentry/sentry-dart/pull/2975))
+
+## 9.0.0-RC.3
+
+### Features
+
+- Sentry Structured Logs ([#2919](https://github.com/getsentry/sentry-dart/pull/2919))
+  - The old `SentryLogger` has been renamed to `SdkLogCallback` and can be accessed through `options.log` now.
+  - Adds support for structured logging though `Sentry.logger`:
+```dart
+// Enable in `SentryOptions`:
+options.enableLogs = true;
+
+// Use `Sentry.logger`
+Sentry.logger.info("This is a info log.");
+Sentry.logger.warn("This is a warning log with attributes.", attributes: {
+  'string-attribute': SentryLogAttribute.string('string'),
+  'int-attribute': SentryLogAttribute.int(1),
+  'double-attribute': SentryLogAttribute.double(1.0),
+  'bool-attribute': SentryLogAttribute.bool(true),
+});
+```
+
+## 9.0.0-RC.2
+
+### Fixes
+
+- Add `hasSize` guard when using a renderObject in `SentryUserInteractionWidget` ([#2946](https://github.com/getsentry/sentry-dart/pull/2946))
+
+## 9.0.0-RC.1
+
+### Fixes
+
+- Fix feature flag model keys ([#2943](https://github.com/getsentry/sentry-dart/pull/2943))
+
+## 9.0.0-RC
+
+### Various fixes & improvements
+
+- build(deps): bump ruby/setup-ruby from 1.233.0 to 1.237.0 (#2908) by @dependabot
+- build(deps): bump actions/create-github-app-token from 2.0.2 to 2.0.6 (#2909) by @dependabot
+
+## 9.0.0-beta.2
+
+### Fixes
+
+- Errors caught by `OnErrorIntegration` should be unhandled by default ([#2901](https://github.com/getsentry/sentry-dart/pull/2901))
+  - This will not affect grouping
+  - This might affect crash-free rate
+
+### Dependencies
+
+- Bump Android SDK from v8.9.0 to v8.11.1 ([#2899](https://github.com/getsentry/sentry-dart/pull/2899), [#2904](https://github.com/getsentry/sentry-dart/pull/2904))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#8111)
+  - [diff](https://github.com/getsentry/sentry-java/compare/8.9.0...8.11.1)
+- Bump Cocoa SDK from v8.49.1 to v8.49.2 ([#2905](https://github.com/getsentry/sentry-dart/pull/2905))
+  - [changelog](https://github.com/getsentry/sentry-cocoa/blob/main/CHANGELOG.md#8492)
+  - [diff](https://github.com/getsentry/sentry-cocoa/compare/8.49.1...8.49.2)
+
+## 9.0.0-beta.1
+
+### Features
+
+- Properly generates and links trace IDs for errors and spans ([#2869](https://github.com/getsentry/sentry-dart/pull/2869), [#2861](https://github.com/getsentry/sentry-dart/pull/2861)):
+  - **With `SentryNavigatorObserver`** - each navigation event starts a new trace.
+  - **Without `SentryNavigatorObserver` on non-web platforms** - a new trace is started from app
+    lifecycle hooks.
+  - **Web without `SentryNavigatorObserver`** - the same trace ID is reused until the page is
+    refreshed or closed.
+- Add `FeatureFlagIntegration` ([#2825](https://github.com/getsentry/sentry-dart/pull/2825))
+```dart
+// Manually track a feature flag
+Sentry.addFeatureFlag('my-feature', true);
+```
+- Firebase Remote Config Integration ([#2837](https://github.com/getsentry/sentry-dart/pull/2837))
+```dart
+// Add the integration to automatically track feature flags from firebase remote config.
+await SentryFlutter.init(
+  (options) {
+    options.dsn = 'https://example@sentry.io/add-your-dsn-here';
+    options.addIntegration(
+      SentryFirebaseRemoteConfigIntegration(
+        firebaseRemoteConfig: yourFirebaseRemoteConfig,
+      ),
+    );
+  },
+);
+```
+- Make hierarchical exception grouping opt-in ([#2858](https://github.com/getsentry/sentry-dart/pull/2858))
+
+
+### Fixes
+
+- Trace propagation in HTTP tracing clients not correctly set up if performance is disabled ([#2850](https://github.com/getsentry/sentry-dart/pull/2850))
+
+### Behavioral changes
+
+- Mutable Data Classes ([#2818](https://github.com/getsentry/sentry-dart/pull/2818))
+  - Some SDK classes do not have `const` constructors anymore.
+  - The `copyWith` and `clone` methods of SDK classes were deprecated.
+- Set log level to `warning` by default when `debug = true` ([#2836](https://github.com/getsentry/sentry-dart/pull/2836))
+- Set HTTP client breadcrumbs log level based on response status code ([#2847](https://github.com/getsentry/sentry-dart/pull/2847))
+  - 5xx is mapped to `SentryLevel.error`
+  - 4xx is mapped to `SentryLevel.warning`
+- Parent-child relationship for the PlatformExceptions and Cause ([#2803](https://github.com/getsentry/sentry-dart/pull/2803), [#2858](https://github.com/getsentry/sentry-dart/pull/2858))
+  - Improves and changes exception grouping. To opt in, set `groupExceptions=true`
+- Set `anrEnabled` enabled per default ([#2878](https://github.com/getsentry/sentry-dart/pull/2878))
+
+### API Changes
+
+- Update naming of `LoadImagesListIntegration` to `LoadNativeDebugImagesIntegration` ([#2833](https://github.com/getsentry/sentry-dart/pull/2833))
+- Remove `other` from `SentryRequest` ([#2879](https://github.com/getsentry/sentry-dart/pull/2879))
+
+### Dependencies
+
+- Bump Android SDK from v8.2.0 to v8.9.0 ([#2819](https://github.com/getsentry/sentry-dart/pull/2819), [#2831](https://github.com/getsentry/sentry-dart/pull/2831), [#2848](https://github.com/getsentry/sentry-dart/pull/2848), [#2873](https://github.com/getsentry/sentry-dart/pull/2873), [#2883](https://github.com/getsentry/sentry-dart/pull/2883))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#890)
+  - [diff](https://github.com/getsentry/sentry-java/compare/8.2.0...8.9.0)
+- Bump Cocoa SDK from v8.46.0 to v8.49.1 ([#2820](https://github.com/getsentry/sentry-dart/pull/2820), [#2851](https://github.com/getsentry/sentry-dart/pull/2851), [#2884](https://github.com/getsentry/sentry-dart/pull/2884))
+  - [changelog](https://github.com/getsentry/sentry-cocoa/blob/main/CHANGELOG.md#8491)
+  - [diff](https://github.com/getsentry/sentry-cocoa/compare/8.46.0...8.49.1)
+- Bump Native SDK from v0.8.2 to v0.8.4 ([#2823](https://github.com/getsentry/sentry-dart/pull/2823), [#2872](https://github.com/getsentry/sentry-dart/pull/2872))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#084)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.8.2...0.8.4)
+- Bump jni from v0.14.0 to v0.14.1 ([#2800])(https://github.com/getsentry/sentry-dart/pull/2800)
+  - [changelog](https://github.com/dart-lang/native/blob/main/pkgs/jni/CHANGELOG.md#0141)
+  - [diff](https://github.com/dart-lang/native/compare/jnigen-v0.14.0..jnigen-v0.14.1)
+
+## 8.14.2
+
+### Improvements
+
+- Improve performance of frames tracking ([#2854](https://github.com/getsentry/sentry-dart/pull/2854))
+- Clean up `getSpan()` log ([#2865](https://github.com/getsentry/sentry-dart/pull/2865))
+
+### Fixes
+
+- `options.diagnosticLevel` not affecting logs ([#2856](https://github.com/getsentry/sentry-dart/pull/2856))
+
+## 9.0.0-alpha.2
+
+### Features
+
+- Add support for Flutter Web release health ([#2794](https://github.com/getsentry/sentry-dart/pull/2794))
+  - Requires using `SentryNavigatorObserver`;
+ 
+### Dependencies
+
+- Bump Native SDK from v0.7.20 to v0.8.2 ([#2761](https://github.com/getsentry/sentry-dart/pull/2761), [#2807](https://github.com/getsentry/sentry-dart/pull/2807))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#082)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.7.20...0.8.2)
+- Bump Javascript SDK from v8.42.0 to v9.5.0 ([#2784](https://github.com/getsentry/sentry-dart/pull/2784))
+  - [changelog](https://github.com/getsentry/sentry-javascript/blob/main/CHANGELOG.md#950)
+  - [diff](https://github.com/getsentry/sentry-javascript/compare/8.42.0...9.5.0)
+
+### Behavioral changes
+
+- Set sentry-native backend to `crashpad` by default and `breakpad` for Windows ARM64 ([#2791](https://github.com/getsentry/sentry-dart/pull/2791))
+  - Setting the `SENTRY_NATIVE_BACKEND` environment variable will override the defaults.
+- Remove renderer from `flutter_context` ([#2751](https://github.com/getsentry/sentry-dart/pull/2751))
+  
+### API changes
+
+- Move replay and privacy from experimental to options ([#2755](https://github.com/getsentry/sentry-dart/pull/2755))
+- Cleanup platform mocking ([#2730](https://github.com/getsentry/sentry-dart/pull/2730))
+  - The `PlatformChecker` was renamed to `RuntimeChecker`
+  - Moved `PlatformChecker.platform` to `options.platform`
+
+## 8.14.1
+
+### Fixes
+
+- Improve platform memory collection on windows/linux ([#2798](https://github.com/getsentry/sentry-dart/pull/2798))
+  - Fixes an issue where total memory on windows was not read.
+  - Free memory collection was removed on windows/linux, due to performance issues.
+- Fix adding runtime to contexts ([#2813](https://github.com/getsentry/sentry-dart/pull/2813))
+
+### Dependencies
+
+- Bump Android SDK from v7.22.1 to v7.22.4 ([#2810](https://github.com/getsentry/sentry-dart/pull/2810))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/7.x.x/CHANGELOG.md#7224)
+  - [diff](https://github.com/getsentry/sentry-java/compare/7.22.1...7.22.4)
+
+## 8.14.0
+
+This release fixes an issue where Cold starts can be incorrectly reported as Warm starts on Android.
+
+### Behavioral changes
+
+- ⚠️ Auto IP assignment for `SentryUser` is now guarded by `sendDefaultPii` ([#2726](https://github.com/getsentry/sentry-dart/pull/2726))
+  - If you rely on Sentry automatically processing the IP address of the user, set `options.sendDefaultPii = true` or manually set the IP address of the `SentryUser` to `{{auto}}`
+- Adding the device name to Contexts is now guarded by `sendDefaultPii` ([#2741](https://github.com/getsentry/sentry-dart/pull/2741))
+  - Set `options.sendDefaultPii = true` if you want to have the device name reported
+- Remove macOS display refresh rate support ([#2628](https://github.com/getsentry/sentry-dart/pull/2628))
+  - Can't reliably detect on multi-monitor systems and on older macOS versions.
+  - Not very meaningful, as other applications may be running in parallel and affecting it.
+
+### Enhancements
+
+- Add Flutter runtime information ([#2742](https://github.com/getsentry/sentry-dart/pull/2742))
+  - This works if the version of Flutter you're using includes [this code](https://github.com/flutter/flutter/pull/163761).
+- Use `loadDebugImagesForAddresses` API for Android ([#2706](https://github.com/getsentry/sentry-dart/pull/2706))
+  - This reduces the envelope size and data transferred across method channels
+  - If debug images received by `loadDebugImagesForAddresses` are empty, the SDK loads all debug images as fallback
+- Disable `ScreenshotIntegration`, `WidgetsBindingIntegration` and `SentryWidget` in multi-view apps #2366 ([#2366](https://github.com/getsentry/sentry-dart/pull/2366))
+
+### Fixes
+
+- Pass missing `captureFailedRequests` param to `FailedRequestInterceptor` ([#2744](https://github.com/getsentry/sentry-dart/pull/2744))
+- Bind root screen transaction to scope ([#2756](https://github.com/getsentry/sentry-dart/pull/2756))
+- Reference to `SentryWidgetsFlutterBinding` in warning message in `FramesTrackingIntegration` ([#2704](https://github.com/getsentry/sentry-dart/pull/2704))
+
+### Deprecations
+
+- Deprecate Drift `SentryQueryExecutor` ([#2715](https://github.com/getsentry/sentry-dart/pull/2715))
+  - This will be replace by `SentryQueryInterceptor` in the next major v9
+```dart
+// Example usage in Sentry Flutter v9
+final executor = NativeDatabase.memory().interceptWith(
+  SentryQueryInterceptor(databaseName: 'your_db_name'),
+);
+
+final db = AppDatabase(executor);
+```
+- Deprecate `autoAppStart` and `setAppStartEnd` ([#2681](https://github.com/getsentry/sentry-dart/pull/2681))
+
+### Dependencies
+
+- Bump Native SDK from v0.7.19 to v0.7.20 ([#2652](https://github.com/getsentry/sentry-dart/pull/2652))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#0720)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.7.19...0.7.20)
+- Bump Cocoa SDK from v8.44.0 to v8.46.0 ([#2772](https://github.com/getsentry/sentry-dart/pull/2772))
+  - [changelog](https://github.com/getsentry/sentry-cocoa/blob/main/CHANGELOG.md#8460)
+  - [diff](https://github.com/getsentry/sentry-cocoa/compare/8.44.0...8.46.0)
+
+## 9.0.0-alpha.1
+
+### Breaking changes
+
+- Remove `SentryDisplayWidget` and manual TTID implementation ([#2668](https://github.com/getsentry/sentry-dart/pull/2668))
+- Increase minimum SDK version requirements to Dart v3.5.0 and Flutter v3.24.0 ([#2643](https://github.com/getsentry/sentry-dart/pull/2643))
+- Remove screenshot option `attachScreenshotOnlyWhenResumed` ([#2664](https://github.com/getsentry/sentry-dart/pull/2664))
+- Remove deprecated `beforeScreenshot` ([#2662](https://github.com/getsentry/sentry-dart/pull/2662))
+- Remove old user feedback api ([#2686](https://github.com/getsentry/sentry-dart/pull/2686))
+- Remove deprecated loggers ([#2685](https://github.com/getsentry/sentry-dart/pull/2685))
+- Remove user segment ([#2687](https://github.com/getsentry/sentry-dart/pull/2687))
+- Enable JS SDK native integration by default ([#2688](https://github.com/getsentry/sentry-dart/pull/2688))
+- Remove `enableTracing` ([#2695](https://github.com/getsentry/sentry-dart/pull/2695))
+- Remove `options.autoAppStart` and `setAppStartEnd` ([#2680](https://github.com/getsentry/sentry-dart/pull/2680))
+- Bump Drift min version to `2.24.0` and use `QueryInterceptor` instead of `QueryExecutor` ([#2679](https://github.com/getsentry/sentry-dart/pull/2679))
+- Add hint for transactions ([#2675](https://github.com/getsentry/sentry-dart/pull/2675))
+  - `BeforeSendTransactionCallback` now has a `Hint` parameter
+- Remove `dart:html` usage in favour of `package:web` ([#2710](https://github.com/getsentry/sentry-dart/pull/2710))
+- Remove max response body size ([#2709](https://github.com/getsentry/sentry-dart/pull/2709))
+  - Responses are now only attached if size is below ~0.15mb
+  - Responses are attached to the `Hint` object, which can be read in `beforeSend`/`beforeSendTransaction` callbacks via `hint.response`.
+  - For now, only the `dio` integration is supported.
+- Enable privacy masking for screenshots by default ([#2728](https://github.com/getsentry/sentry-dart/pull/2728))
+  
+### Enhancements
+
+- Replay: improve Android native interop performance by using JNI ([#2670](https://github.com/getsentry/sentry-dart/pull/2670))
+
+### Dependencies
+
+- Bump Android SDK from v7.20.1 to v8.1.0 ([#2650](https://github.com/getsentry/sentry-dart/pull/2650))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#810)
+  - [diff](https://github.com/getsentry/sentry-java/compare/7.20.1...8.1.0)
+
+## 8.14.0-beta.1
+
+### Behavioral changes
+
+- ⚠️ Auto IP assignment for `SentryUser` is now guarded by `sendDefaultPii` ([#2726](https://github.com/getsentry/sentry-dart/pull/2726))
+  - If you rely on Sentry automatically processing the IP address of the user, set `options.sendDefaultPii = true` or manually set the IP address of the `SentryUser` to `{{auto}}`
+- Adding the device name to Contexts is now guarded by `sendDefaultPii` ([#2741](https://github.com/getsentry/sentry-dart/pull/2741))
+  - Set `options.sendDefaultPii = true` if you want to have the device name reported
+
+### Features
+
+- Disable `ScreenshotIntegration`, `WidgetsBindingIntegration` and `SentryWidget` in multi-view apps #2366 ([#2366](https://github.com/getsentry/sentry-dart/pull/2366))
+
+### Enhancements
+
+- Use `loadDebugImagesForAddresses` API for Android ([#2706](https://github.com/getsentry/sentry-dart/pull/2706))
+  - This reduces the envelope size and data transferred across method channels
+  - If debug images received by `loadDebugImagesForAddresses` are empty, the SDK loads all debug images as fallback
+
+### Fixes
+
+- Reference to `SentryWidgetsFlutterBinding` in warning message in `FramesTrackingIntegration` ([#2704](https://github.com/getsentry/sentry-dart/pull/2704))
+
+### Deprecations
+
+- Deprecate Drift `SentryQueryExecutor` ([#2715](https://github.com/getsentry/sentry-dart/pull/2715))
+  - This will be replace by `SentryQueryInterceptor` in the next major v9
+```dart
+// Example usage in Sentry Flutter v9
+final executor = NativeDatabase.memory().interceptWith(
+  SentryQueryInterceptor(databaseName: 'your_db_name'),
+);
+
+final db = AppDatabase(executor);
+```
+- Deprecate `autoAppStart` and `setAppStartEnd` ([#2681](https://github.com/getsentry/sentry-dart/pull/2681))
+
+### Other
+
+- Remove macOS display refresh rate support ([#2628](https://github.com/getsentry/sentry-dart/pull/2628))
+  - Can't reliably detect on multi-monitor systems and on older macOS versions.
+  - Not very meaningful, as other applications may be running in parallel and affecting it.
+
+### Dependencies
+
+- Bump Android SDK from v7.20.1 to v8.2.0 ([#2660](https://github.com/getsentry/sentry-dart/pull/2660), [#2713](https://github.com/getsentry/sentry-dart/pull/2713))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/7.x.x/CHANGELOG.md#820)
+  - [diff](https://github.com/getsentry/sentry-java/compare/7.20.1...8.2.0)
+- Bump Native SDK from v0.7.19 to v0.7.20 ([#2652](https://github.com/getsentry/sentry-dart/pull/2652))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#0720)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.7.19...0.7.20)
+- Bump Cocoa SDK from v8.44.0 to v8.45.0 ([#2718](https://github.com/getsentry/sentry-dart/pull/2718))
+  - [changelog](https://github.com/getsentry/sentry-cocoa/blob/main/CHANGELOG.md#8450)
+  - [diff](https://github.com/getsentry/sentry-cocoa/compare/8.44.0...8.45.0)
+
+## 8.13.3
+
+This release fixes an issue where Cold starts can be incorrectly reported as Warm starts on Android.
+
+### Dependencies
+
+- Bump Android SDK from v7.22.0 to v7.22.1 ([#2785](https://github.com/getsentry/sentry-dart/pull/2785))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/7.x.x/CHANGELOG.md#7221)
+  - [diff](https://github.com/getsentry/sentry-java/compare/7.22.0...7.22.1)
+
+## 8.13.2
+
+> [!WARNING]
+> This release contains an issue where Cold starts can be incorrectly reported as Warm starts on Android. We recommend staying on version 8.12.0 if you use this feature on Android.
+> See issue [#2769](https://github.com/getsentry/sentry-dart/issues/2769) for more details.
+
+### Fixes
+
+- `build_web_compiler` error ([#2736](https://github.com/getsentry/sentry-dart/pull/2736))
+  - Use `if (dart.library.html)` instead of `if (dart.html)` for imports
+
+## 8.13.1
+
+> [!WARNING]
+> This release contains an issue where Cold starts can be incorrectly reported as Warm starts on Android. We recommend staying on version 8.12.0 if you use this feature on Android.
+> See issue [#2769](https://github.com/getsentry/sentry-dart/issues/2769) for more details.
+
+### Fixes
+
+- Replay video interruption if a `navigation` breadcrumb is missing `to` route info ([#2720](https://github.com/getsentry/sentry-dart/pull/2720))
+
+### Dependencies
+
+- Bump Android SDK from v7.20.1 to v7.22.0 ([#2705](https://github.com/getsentry/sentry-dart/pull/2705))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/7.x.x/CHANGELOG.md#7220)
+  - [diff](https://github.com/getsentry/sentry-java/compare/7.20.1...7.22.0)
+
+## 8.13.0
+
+> [!WARNING]
+> This release contains an issue where Cold starts can be incorrectly reported as Warm starts on Android. We recommend staying on version 8.12.0 if you use this feature on Android.
+> See issue [#2769](https://github.com/getsentry/sentry-dart/issues/2769) for more details.
+
+### Breaking changes
+
+- Remove Metrics API ([#2571](https://github.com/getsentry/sentry-dart/pull/2571))
+  - The Metrics product never reached maturity from beta and has officially ended in October 7th, 2024
+  - Read [this post](https://sentry.zendesk.com/hc/en-us/articles/26369339769883-Metrics-Beta-Ended-on-October-7th) for more information
+
+### Features
+
+- Add `beforeCapture` for View Hierarchy ([#2523](https://github.com/getsentry/sentry-dart/pull/2523))
+  - View hierarchy calls are now debounced for 2 seconds.
+- JS SDK integration ([#2572](https://github.com/getsentry/sentry-dart/pull/2572))
+  - Enable the integration by setting `options.enableSentryJs = true`
+  - Features:
+    - Sending envelopes through Sentry JS transport layer
+    - Capturing native JS errors
+- Add SentryReplayQuality setting (`options.experimental.replay.quality`) ([#2582](https://github.com/getsentry/sentry-dart/pull/2582))
+- SPM Support ([#2280](https://github.com/getsentry/sentry-dart/pull/2280))
+
+### Enhancements
+
+- Replay: improve iOS native interop performance ([#2530](https://github.com/getsentry/sentry-dart/pull/2530), [#2573](https://github.com/getsentry/sentry-dart/pull/2573))
+- Replay: improve orientation change tracking accuracy on Android ([#2540](https://github.com/getsentry/sentry-dart/pull/2540))
+- Print a warning if the rate limit was reached ([#2595](https://github.com/getsentry/sentry-dart/pull/2595))
+- Add replay masking config to tags and report SDKs versions ([#2592](https://github.com/getsentry/sentry-dart/pull/2592))
+- Enable `options.debug` when in debug mode ([#2597](https://github.com/getsentry/sentry-dart/pull/2597))
+- Propagate sample seed in baggage header ([#2629](https://github.com/getsentry/sentry-dart/pull/2629))
+  - Read more about the specs [here](https://develop.sentry.dev/sdk/telemetry/traces/#propagated-random-value)
+- Finish and start new transaction when tapping same element again ([#2623](https://github.com/getsentry/sentry-dart/pull/2623))
+
+### Fixes
+
+- Replay: fix masking for frames captured during UI changes ([#2553](https://github.com/getsentry/sentry-dart/pull/2553), [#2657](https://github.com/getsentry/sentry-dart/pull/2657))
+- Replay: fix widget masks overlap when navigating between screens ([#2486](https://github.com/getsentry/sentry-dart/pull/2486), [#2576](https://github.com/getsentry/sentry-dart/pull/2576))
+- WASM compat for Drift ([#2580](https://github.com/getsentry/sentry-dart/pull/2580))
+- Fix image flickering when using `SentryAssetBundle` ([#2577](https://github.com/getsentry/sentry-dart/pull/2577))
+- Fix print recursion detection ([#2624](https://github.com/getsentry/sentry-dart/pull/2624))
+
+### Misc
+
+- Transfer ownership of `sentry_link` to Sentry. You can view the changelog for the previous versions [here](https://github.com/getsentry/sentry-dart/blob/main/link/CHANGELOG_OLD.md) ([#2338](https://github.com/getsentry/sentry-dart/pull/2338))
+  - No functional changes have been made. This version is identical to the previous one.
+  - Change license from Apache to MIT
+
+### Dependencies
+
+- Bump Native SDK from v0.7.17 to v0.7.19 ([#2578](https://github.com/getsentry/sentry-dart/pull/2578), [#2588](https://github.com/getsentry/sentry-dart/pull/2588))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#0719)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.7.17...0.7.19)
+- Bump Android SDK from v7.19.0 to v7.20.1 ([#2536](https://github.com/getsentry/sentry-dart/pull/2536), [#2549](https://github.com/getsentry/sentry-dart/pull/2549), [#2593](https://github.com/getsentry/sentry-dart/pull/2593))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#7201)
+  - [diff](https://github.com/getsentry/sentry-java/compare/7.20.0...7.20.1)
+- Bump Cocoa SDK from v8.42.0 to v8.44.0 ([#2542](https://github.com/getsentry/sentry-dart/pull/2542), [#2548](https://github.com/getsentry/sentry-dart/pull/2548), [#2598](https://github.com/getsentry/sentry-dart/pull/2598), [#2649](https://github.com/getsentry/sentry-dart/pull/2649))
+  - [changelog](https://github.com/getsentry/sentry-cocoa/blob/main/CHANGELOG.md#8440)
+  - [diff](https://github.com/getsentry/sentry-cocoa/compare/8.42.0...8.44.0)
+
+## 8.13.0-beta.3
+
+### Enhancements
+
+- Enable `options.debug` when in debug mode ([#2597](https://github.com/getsentry/sentry-dart/pull/2597))
+
+### Fixes
+
+- Fix image flickering when using `SentryAssetBundle` ([#2577](https://github.com/getsentry/sentry-dart/pull/2577))
+
+### Misc
+
+- Transfer ownership of `sentry_link` to Sentry. You can view the changelog for the previous versions [here](https://github.com/getsentry/sentry-dart/blob/main/link/CHANGELOG_OLD.md) ([#2338](https://github.com/getsentry/sentry-dart/pull/2338))
+  - No functional changes have been made. This version is identical to the previous one.
+  - Change license from Apache to MIT
+
+## 8.13.0-beta.2
+
+### Features
+
+- Add SentryReplayQuality setting (`options.experimental.replay.quality`) ([#2582](https://github.com/getsentry/sentry-dart/pull/2582))
+- SPM Support ([#2280](https://github.com/getsentry/sentry-dart/pull/2280))
+
+### Enhancements
+
+- Print a warning if the rate limit was reached ([#2595](https://github.com/getsentry/sentry-dart/pull/2595))
+- Add replay masking config to tags and report SDKs versions ([#2592](https://github.com/getsentry/sentry-dart/pull/2592))
+
+### Fixes
+
+- WASM compat for Drift ([#2580](https://github.com/getsentry/sentry-dart/pull/2580))
+
+### Dependencies
+
+- Bump Native SDK from v0.7.17 to v0.7.19 ([#2578](https://github.com/getsentry/sentry-dart/pull/2578), [#2588](https://github.com/getsentry/sentry-dart/pull/2588))
+  - [changelog](https://github.com/getsentry/sentry-native/blob/master/CHANGELOG.md#0719)
+  - [diff](https://github.com/getsentry/sentry-native/compare/0.7.17...0.7.19)
+- Bump Android SDK from v7.20.0 to v7.20.1 ([#2593](https://github.com/getsentry/sentry-dart/pull/2593))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#7201)
+  - [diff](https://github.com/getsentry/sentry-java/compare/7.20.0...7.20.1)
+- Bump Cocoa SDK from v8.43.0 to v8.44.0-beta.1 ([#2598](https://github.com/getsentry/sentry-dart/pull/2598))
+  - [changelog](https://github.com/getsentry/sentry-cocoa/blob/main/CHANGELOG.md#8440-beta1)
+  - [diff](https://github.com/getsentry/sentry-cocoa/compare/8.43.0...8.44.0-beta.1)
+
+## 8.13.0-beta.1
+
+### Breaking changes
+
+- Remove Metrics API ([#2571](https://github.com/getsentry/sentry-dart/pull/2571))
+  - The Metrics product never reached maturity from beta and has officially ended in October 7th, 2024
+  - Read [this post](https://sentry.zendesk.com/hc/en-us/articles/26369339769883-Metrics-Beta-Ended-on-October-7th) for more information
+
+### Features
+
+- Add `beforeCapture` for View Hierarchy ([#2523](https://github.com/getsentry/sentry-dart/pull/2523))
+  - View hierarchy calls are now debounced for 2 seconds.
+- JS SDK integration ([#2572](https://github.com/getsentry/sentry-dart/pull/2572))
+  - Enable the integration by setting `options.enableSentryJs = true`
+  - Features:
+    - Sending envelopes through Sentry JS transport layer
+    - Capturing native JS errors
+
+### Enhancements
+
+- Replay: improve iOS native interop performance ([#2530](https://github.com/getsentry/sentry-dart/pull/2530), [#2573](https://github.com/getsentry/sentry-dart/pull/2573))
+- Replay: improve orientation change tracking accuracy on Android ([#2540](https://github.com/getsentry/sentry-dart/pull/2540))
+
+### Fixes
+
+- Replay: fix masking for frames captured during UI changes ([#2553](https://github.com/getsentry/sentry-dart/pull/2553))
+- Replay: fix widget masks overlap when navigating between screens ([#2486](https://github.com/getsentry/sentry-dart/pull/2486), [#2576](https://github.com/getsentry/sentry-dart/pull/2576))
+
+### Dependencies
+
+- Bump Cocoa SDK from v8.42.0 to v8.43.0 ([#2542](https://github.com/getsentry/sentry-dart/pull/2542), [#2548](https://github.com/getsentry/sentry-dart/pull/2548))
+  - [changelog](https://github.com/getsentry/sentry-cocoa/blob/main/CHANGELOG.md#8430)
+  - [diff](https://github.com/getsentry/sentry-cocoa/compare/8.42.0...8.43.0)
+- Bump Android SDK from v7.19.0 to v7.20.0 ([#2536](https://github.com/getsentry/sentry-dart/pull/2536), [#2549](https://github.com/getsentry/sentry-dart/pull/2549))
+  - [changelog](https://github.com/getsentry/sentry-java/blob/main/CHANGELOG.md#7200)
+  - [diff](https://github.com/getsentry/sentry-java/compare/7.19.0...7.20.0)
+
 ## 8.12.0
 
 ### Deprecations
@@ -33,7 +917,7 @@
       },
       appRunner: () => runApp(MyApp()),
     );
-  } (error, stackTrace) {
+  }, (error, stackTrace) {
     // Automatically sends errors to Sentry, no need to do any
     // captureException calls on your part.
     // On top of that, you can do your own custom stuff in this callback.
@@ -124,7 +1008,7 @@
       },
       appRunner: () => runApp(MyApp()),
     );
-  } (error, stackTrace) {
+  }, (error, stackTrace) {
     // Automatically sends errors to Sentry, no need to do any
     // captureException calls on your part.
     // On top of that, you can do your own custom stuff in this callback.
@@ -294,7 +1178,6 @@
   });
   ```
   - Replace deprecated `BeforeScreenshotCallback` with new `BeforeCaptureCallback`.
-
 
 ### Fixes
 

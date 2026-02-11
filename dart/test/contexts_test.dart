@@ -37,15 +37,22 @@ void main() {
       externalFreeStorage: 98765,
       bootTime: testBootTime,
     );
-    const testOS = SentryOperatingSystem(name: 'testOS');
+    final testOS = SentryOperatingSystem(name: 'testOS');
     final testRuntimes = [
-      const SentryRuntime(name: 'testRT1', version: '1.0'),
-      const SentryRuntime(name: 'testRT2', version: '2.3.1'),
+      SentryRuntime(name: 'testRT1', version: '1.0'),
+      SentryRuntime(name: 'testRT2', version: '2.3.1'),
     ];
-    const testApp = SentryApp(version: '1.2.3');
-    const testBrowser = SentryBrowser(version: '12.3.4');
+    final testApp = SentryApp(version: '1.2.3');
+    final testBrowser = SentryBrowser(version: '12.3.4');
 
     final gpu = SentryGpu(name: 'Radeon', version: '1');
+
+    final flags = SentryFeatureFlags(
+      values: [
+        SentryFeatureFlag(flag: 'feature_flag_1', result: true),
+        SentryFeatureFlag(flag: 'feature_flag_2', result: false),
+      ],
+    );
 
     final contexts = Contexts(
       device: testDevice,
@@ -54,6 +61,7 @@ void main() {
       app: testApp,
       browser: testBrowser,
       gpu: gpu,
+      flags: flags,
     )
       ..['theme'] = {'value': 'material'}
       ..['version'] = {'value': 9};
@@ -94,6 +102,12 @@ void main() {
       'testrt2': {'name': 'testRT2', 'type': 'runtime', 'version': '2.3.1'},
       'theme': {'value': 'material'},
       'version': {'value': 9},
+      'flags': {
+        'values': [
+          {'flag': 'feature_flag_1', 'result': true},
+          {'flag': 'feature_flag_2', 'result': false},
+        ]
+      },
     };
 
     test('serializes to JSON', () {
@@ -113,6 +127,7 @@ void main() {
     });
 
     test('clone context', () {
+      // ignore: deprecated_member_use_from_same_package
       final clone = contexts.clone();
 
       expect(clone.app!.toJson(), contexts.app!.toJson());
@@ -121,7 +136,7 @@ void main() {
       expect(
           clone.operatingSystem!.toJson(), contexts.operatingSystem!.toJson());
       expect(clone.gpu!.toJson(), contexts.gpu!.toJson());
-
+      expect(clone.flags!.toJson(), contexts.flags!.toJson());
       for (final element in contexts.runtimes) {
         expect(
           clone.runtimes.where(
@@ -133,6 +148,67 @@ void main() {
 
       expect(clone['theme'], {'value': 'material'});
       expect(clone['version'], {'value': 9});
+    });
+
+    test('set runtimes', () {
+      final contexts = Contexts();
+      contexts.runtimes = [
+        SentryRuntime(name: 'testRT1', version: '1.0'),
+        SentryRuntime(name: 'testRT2', version: '2.0'),
+      ];
+      expect(contexts.runtimes.length, 2);
+      expect(contexts.runtimes.first.name, 'testRT1');
+      expect(contexts.runtimes.first.version, '1.0');
+      expect(contexts.runtimes.last.name, 'testRT2');
+      expect(contexts.runtimes.last.version, '2.0');
+    });
+
+    test('copyWith with contexts does not throw', () {
+      final contexts = Contexts(
+        runtimes: [
+          SentryRuntime(name: 'testRT1', version: '1.0'),
+        ],
+      );
+      // ignore: deprecated_member_use_from_same_package
+      final copy = contexts.copyWith();
+      copy.addRuntime(SentryRuntime(name: 'testRT2', version: '2.0'));
+
+      expect(copy.runtimes.length, 2);
+      expect(copy.runtimes.last.name, 'testRT2');
+    });
+
+    test('can add runtime if runtime setter unmodifiable', () {
+      final contexts = Contexts();
+      contexts.runtimes = List.unmodifiable([
+        SentryRuntime(name: 'testRT1', version: '1.0'),
+      ]);
+      contexts.addRuntime(SentryRuntime(name: 'testRT2', version: '2.0'));
+
+      expect(contexts.runtimes.length, 2);
+      expect(contexts.runtimes.last.name, 'testRT2');
+    });
+
+    test('can add runtime if runtime ctor unmodifiable', () {
+      final contexts = Contexts(
+        runtimes: List.unmodifiable([
+          SentryRuntime(name: 'testRT1', version: '1.0'),
+        ]),
+      );
+      contexts.addRuntime(SentryRuntime(name: 'testRT2', version: '2.0'));
+
+      expect(contexts.runtimes.length, 2);
+      expect(contexts.runtimes.last.name, 'testRT2');
+    });
+
+    test('set flags', () {
+      final contexts = Contexts();
+      contexts.flags = SentryFeatureFlags(
+        values: [
+          SentryFeatureFlag(flag: 'feature_flag_1', result: true),
+          SentryFeatureFlag(flag: 'feature_flag_2', result: false),
+        ],
+      );
+      expect(contexts.flags!.toJson(), flags.toJson());
     });
   });
 
@@ -244,7 +320,12 @@ const jsonContexts = '''
       "raw_description":"runtime description RT1 1.0"
    },
    "browser": {"version": "12.3.4"},
-   "gpu": {"name": "Radeon", "version": "1"}
-  
+   "gpu": {"name": "Radeon", "version": "1"},
+   "flags": {
+      "values": [
+        {"flag": "feature_flag_1", "result": true},
+        {"flag": "feature_flag_2", "result": false}
+      ]
+   }
 }
 ''';

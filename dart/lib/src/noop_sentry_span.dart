@@ -1,4 +1,4 @@
-import 'metrics/local_metrics_aggregator.dart';
+import 'hint.dart';
 import 'protocol.dart';
 import 'tracing.dart';
 import 'utils.dart';
@@ -27,7 +27,11 @@ class NoOpSentrySpan extends ISentrySpan {
   }
 
   @override
-  Future<void> finish({SpanStatus? status, DateTime? endTimestamp}) async {}
+  Future<void> finish({
+    SpanStatus? status,
+    DateTime? endTimestamp,
+    Hint? hint,
+  }) async {}
 
   @override
   void removeData(String key) {}
@@ -96,7 +100,4 @@ class NoOpSentrySpan extends ISentrySpan {
 
   @override
   void scheduleFinish() {}
-
-  @override
-  LocalMetricsAggregator? get localMetricsAggregator => null;
 }

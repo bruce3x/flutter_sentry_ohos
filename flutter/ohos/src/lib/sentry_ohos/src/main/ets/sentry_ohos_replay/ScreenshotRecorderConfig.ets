@@ -38,3 +38,6 @@ export class ScreenshotRecorderConfig {
     this.bitRate = Math.max(0, Math.floor(bitRate));
   }
 }
+
+
+

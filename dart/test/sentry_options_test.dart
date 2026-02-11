@@ -33,15 +33,32 @@ void main() {
     expect(200, options.maxBreadcrumbs);
   });
 
-  test('SentryLogger sets a diagnostic logger', () {
+  test('SdkLogger sets a diagnostic logger', () {
     final options = defaultTestOptions();
-    // ignore: deprecated_member_use_from_same_package
-    expect(options.logger, noOpLogger);
-    // ignore: deprecated_member_use_from_same_package
-    options.logger = dartLogger;
+    expect(options.log, noOpLog);
+    options.debug = true;
 
-    // ignore: deprecated_member_use_from_same_package
-    expect(options.logger, isNot(noOpLogger));
+    expect(options.log, isNot(noOpLog));
+  });
+
+  test('setting debug correctly sets logger', () {
+    final options = defaultTestOptions();
+    expect(options.log, noOpLog);
+    expect(options.diagnosticLog, isNull);
+    options.debug = true;
+    expect(options.log, isNot(options.debugLog));
+    expect(options.diagnosticLog!.logger, options.debugLog);
+    expect(options.log, options.diagnosticLog!.log);
+
+    options.debug = false;
+    expect(options.log, isNot(noOpLog));
+    expect(options.diagnosticLog!.logger, noOpLog);
+    expect(options.log, options.diagnosticLog!.log);
+
+    options.debug = true;
+    expect(options.log, isNot(options.debugLog));
+    expect(options.diagnosticLog!.logger, options.debugLog);
+    expect(options.log, options.diagnosticLog!.log);
   });
 
   test('tracesSampler is null by default', () {
@@ -101,7 +118,7 @@ void main() {
     final options = defaultTestOptions();
 
     expect(options.sentryClientName,
-        '${sdkName(options.platformChecker.isWeb)}/$sdkVersion');
+        '${sdkName(options.platform.isWeb)}/$sdkVersion');
   });
 
   test('SentryOptions has default idleTimeout', () {
@@ -110,36 +127,10 @@ void main() {
     expect(options.idleTimeout?.inSeconds, Duration(seconds: 3).inSeconds);
   });
 
-  test('when enableTracing is set to true tracing is considered enabled', () {
-    final options = SentryOptions.empty();
-    // ignore: deprecated_member_use_from_same_package
-    options.enableTracing = true;
-
-    expect(options.isTracingEnabled(), true);
-  });
-
-  test('when enableTracing is set to false tracing is considered disabled', () {
-    final options = SentryOptions.empty();
-    // ignore: deprecated_member_use_from_same_package
-    options.enableTracing = false;
-    options.tracesSampleRate = 1.0;
-    options.tracesSampler = (_) {
-      return 1.0;
-    };
-
-    expect(options.isTracingEnabled(), false);
-  });
-
   test('Spotlight is disabled by default', () {
     final options = defaultTestOptions();
 
     expect(options.spotlight.enabled, false);
-  });
-
-  test('metrics are disabled by default', () {
-    final options = defaultTestOptions();
-
-    expect(options.enableMetrics, false);
   });
 
   test('enableExceptionTypeIdentification is enabled by default', () {
@@ -148,55 +139,16 @@ void main() {
     expect(options.enableExceptionTypeIdentification, true);
   });
 
-  test('default tags for metrics are enabled by default', () {
-    final options = defaultTestOptions();
-    options.enableMetrics = true;
-
-    expect(options.enableDefaultTagsForMetrics, true);
-  });
-
-  test('default tags for metrics are disabled if metrics are disabled', () {
-    final options = defaultTestOptions();
-    options.enableMetrics = false;
-
-    expect(options.enableDefaultTagsForMetrics, false);
-  });
-
-  test('default tags for metrics are enabled if metrics are enabled, too', () {
-    final options = defaultTestOptions();
-    options.enableMetrics = true;
-    options.enableDefaultTagsForMetrics = true;
-
-    expect(options.enableDefaultTagsForMetrics, true);
-  });
-
-  test('span local metric aggregation is enabled by default', () {
-    final options = defaultTestOptions();
-    options.enableMetrics = true;
-
-    expect(options.enableSpanLocalMetricAggregation, true);
-  });
-
-  test('span local metric aggregation is disabled if metrics are disabled', () {
-    final options = defaultTestOptions();
-    options.enableMetrics = false;
-
-    expect(options.enableSpanLocalMetricAggregation, false);
-  });
-
-  test('span local metric aggregation is enabled if metrics are enabled, too',
-      () {
-    final options = defaultTestOptions();
-    options.enableMetrics = true;
-    options.enableSpanLocalMetricAggregation = true;
-
-    expect(options.enableSpanLocalMetricAggregation, true);
-  });
-
   test('enablePureDartSymbolication is enabled by default', () {
     final options = defaultTestOptions();
 
     expect(options.enableDartSymbolication, true);
+  });
+
+  test('diagnosticLevel is warning by default', () {
+    final options = defaultTestOptions();
+
+    expect(options.diagnosticLevel, SentryLevel.warning);
   });
 
   test('parsedDsn is correctly parsed and cached', () {

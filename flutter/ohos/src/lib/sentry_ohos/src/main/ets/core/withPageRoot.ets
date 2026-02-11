@@ -88,6 +88,16 @@ function ensureHandle(self: Object, opts: WithPageRootOptions): PageRootHandle |
   }
 }
 
+type ComponentMethod = (...args: Array<Object>) => Object | void;
+
+function invokeOriginal(self: Object, fn: ComponentMethod | undefined, args: Array<Object>): Object | void {
+  if (!fn) {
+    return undefined;
+  }
+  const bound: ComponentMethod = (fn as ComponentMethod).bind(self) as ComponentMethod;
+  return bound(...args);
+}
+
 class PageRootHandlers {
   aboutToAppear(this: Object, ...args: Array<Object>): Object | void {
     const meta = getMeta(this);
@@ -97,9 +107,8 @@ class PageRootHandlers {
       try { h?.refreshBounds().catch(() => {}); } catch (_) {}
       try { h?.setVisible(true); } catch (_) {}
     }
-    if (typeof meta.__orig_aboutToAppear__ === 'function') {
-      return (meta.__orig_aboutToAppear__ as (...items: Array<Object>) => Object | void)(...args);
-    }
+    const orig = meta.__orig_aboutToAppear__;
+    return invokeOriginal(this, orig, args);
   }
 
   aboutToDisappear(this: Object, ...args: Array<Object>): Object | void {
@@ -107,9 +116,8 @@ class PageRootHandlers {
     const h = pageRootHandleMap.get(this as Object);
     try { if (h) h.dispose(); } catch (_) {}
     pageRootHandleMap.delete(this as Object);
-    if (typeof meta.__orig_aboutToDisappear__ === 'function') {
-      return (meta.__orig_aboutToDisappear__ as (...items: Array<Object>) => Object | void)(...args);
-    }
+    const orig = meta.__orig_aboutToDisappear__;
+    return invokeOriginal(this, orig, args);
   }
 
   onPageShow(this: Object, ...args: Array<Object>): Object | void {
@@ -117,25 +125,22 @@ class PageRootHandlers {
     const h = pageRootHandleMap.get(this as Object);
     try { h?.setVisible(true); } catch (_) {}
     try { h?.refreshBounds().catch(() => {}); } catch (_) {}
-    if (typeof meta.__orig_onPageShow__ === 'function') {
-      return (meta.__orig_onPageShow__ as (...items: Array<Object>) => Object | void)(...args);
-    }
+    const orig = meta.__orig_onPageShow__;
+    return invokeOriginal(this, orig, args);
   }
 
   onPageHide(this: Object, ...args: Array<Object>): Object | void {
     const meta = getMeta(this);
     const h = pageRootHandleMap.get(this as Object);
     try { h?.setVisible(false); } catch (_) {}
-    if (typeof meta.__orig_onPageHide__ === 'function') {
-      return (meta.__orig_onPageHide__ as (...items: Array<Object>) => Object | void)(...args);
-    }
+    const orig = meta.__orig_onPageHide__;
+    return invokeOriginal(this, orig, args);
   }
 
   build(this: Object, ...args: Array<Object>): Object | void {
     const meta = getMeta(this);
-    const ret = typeof meta.__orig_build__ === 'function'
-      ? (meta.__orig_build__ as (...items: Array<Object>) => Object | void)(...args)
-      : undefined;
+    const orig = meta.__orig_build__;
+    const ret = invokeOriginal(this, orig, args);
     const h = pageRootHandleMap.get(this as Object);
     try { h?.refreshBounds().catch(() => {}); } catch (_) {}
     return ret as (Object | void);

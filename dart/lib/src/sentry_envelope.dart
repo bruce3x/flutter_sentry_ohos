@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'client_reports/client_report.dart';
-import 'metrics/metric.dart';
 import 'protocol.dart';
 import 'sentry_attachment/sentry_attachment.dart';
 import 'sentry_envelope_header.dart';
@@ -9,7 +8,6 @@ import 'sentry_envelope_item.dart';
 import 'sentry_item_type.dart';
 import 'sentry_options.dart';
 import 'sentry_trace_context_header.dart';
-import 'sentry_user_feedback.dart';
 import 'utils.dart';
 
 /// Class representation of `Envelope` file.
@@ -60,23 +58,6 @@ class SentryEnvelope {
     );
   }
 
-  @Deprecated('Will be removed in a future version.')
-  factory SentryEnvelope.fromUserFeedback(
-    SentryUserFeedback feedback,
-    SdkVersion sdkVersion, {
-    String? dsn,
-  }) {
-    return SentryEnvelope(
-      // no need for [traceContext]
-      SentryEnvelopeHeader(
-        feedback.eventId,
-        sdkVersion,
-        dsn: dsn,
-      ),
-      [SentryEnvelopeItem.fromUserFeedback(feedback)],
-    );
-  }
-
   /// Create a [SentryEnvelope] containing one [SentryEnvelopeItem] which holds the [SentryTransaction] data.
   factory SentryEnvelope.fromTransaction(
     SentryTransaction transaction,
@@ -100,19 +81,18 @@ class SentryEnvelope {
     );
   }
 
-  /// Create a [SentryEnvelope] containing one [SentryEnvelopeItem] which holds the [Metric] data.
-  factory SentryEnvelope.fromMetrics(
-    Map<int, Iterable<Metric>> metricsBuckets,
-    SdkVersion sdkVersion, {
-    String? dsn,
-  }) {
+  factory SentryEnvelope.fromLogs(
+    List<SentryLog> items,
+    SdkVersion sdkVersion,
+  ) {
     return SentryEnvelope(
       SentryEnvelopeHeader(
-        SentryId.newId(),
+        null,
         sdkVersion,
-        dsn: dsn,
       ),
-      [SentryEnvelopeItem.fromMetrics(metricsBuckets)],
+      [
+        SentryEnvelopeItem.fromLogs(items),
+      ],
     );
   }
 
@@ -123,6 +103,9 @@ class SentryEnvelope {
     final newLineData = utf8.encode('\n');
     for (final item in items) {
       try {
+        final itemType = item.header.type.toString();
+        // ignore: avoid_print
+        print('[Envelope] begin item type=$itemType');
         final dataFuture = item.dataFactory();
         final data = dataFuture is Future ? await dataFuture : dataFuture;
 
@@ -133,6 +116,8 @@ class SentryEnvelope {
           continue;
         }
 
+        // ignore: avoid_print
+        print('[Envelope] item type=$itemType dataLen=${data.length}');
         yield newLineData;
         yield utf8JsonEncoder.convert(await item.header.toJson(data.length));
         yield newLineData;

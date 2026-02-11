@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'package:meta/meta.dart';
 
 import '../protocol.dart';
 import 'sentry_feedback.dart';
@@ -21,10 +22,11 @@ class Contexts extends MapView<String, dynamic> {
     SentryTraceContext? trace,
     SentryResponse? response,
     SentryFeedback? feedback,
+    SentryFeatureFlags? flags,
   }) : super({
           SentryDevice.type: device,
           SentryOperatingSystem.type: operatingSystem,
-          SentryRuntime.listType: runtimes ?? [],
+          SentryRuntime.listType: List<SentryRuntime>.from(runtimes ?? []),
           SentryApp.type: app,
           SentryBrowser.type: browser,
           SentryGpu.type: gpu,
@@ -32,6 +34,7 @@ class Contexts extends MapView<String, dynamic> {
           SentryTraceContext.type: trace,
           SentryResponse.type: response,
           SentryFeedback.type: feedback,
+          SentryFeatureFlags.type: flags,
         });
 
   /// Deserializes [Contexts] from JSON [Map].
@@ -68,10 +71,13 @@ class Contexts extends MapView<String, dynamic> {
       feedback: data[SentryFeedback.type] != null
           ? SentryFeedback.fromJson(Map.from(data[SentryFeedback.type]))
           : null,
+      flags: data[SentryFeatureFlags.type] != null
+          ? SentryFeatureFlags.fromJson(Map.from(data[SentryFeatureFlags.type]))
+          : null,
     );
 
     data.keys
-        .where((key) => !_defaultFields.contains(key) && data[key] != null)
+        .where((key) => !defaultFields.contains(key) && data[key] != null)
         .forEach((key) => contexts[key] = data[key]);
 
     return contexts;
@@ -97,6 +103,9 @@ class Contexts extends MapView<String, dynamic> {
   /// on top of Android).
   List<SentryRuntime> get runtimes =>
       List.unmodifiable(this[SentryRuntime.listType] ?? []);
+
+  set runtimes(List<SentryRuntime> runtimes) =>
+      this[SentryRuntime.listType] = List<SentryRuntime>.from(runtimes);
 
   void addRuntime(SentryRuntime runtime) =>
       this[SentryRuntime.listType].add(runtime);
@@ -137,15 +146,21 @@ class Contexts extends MapView<String, dynamic> {
 
   set trace(SentryTraceContext? trace) => this[SentryTraceContext.type] = trace;
 
-  /// Response context for a HTTP response.
+  /// Response context for a HTTP response. Not added automatically.
   SentryResponse? get response => this[SentryResponse.type];
 
+  /// Use [Hint.response] in `beforeSend/beforeSendTransaction` to populate this value.
   set response(SentryResponse? value) => this[SentryResponse.type] = value;
 
   /// Feedback context for a feedback event.
   SentryFeedback? get feedback => this[SentryFeedback.type];
 
   set feedback(SentryFeedback? value) => this[SentryFeedback.type] = value;
+
+  /// Feature flags context for a feature flag event.
+  SentryFeatureFlags? get flags => this[SentryFeatureFlags.type];
+
+  set flags(SentryFeatureFlags? value) => this[SentryFeatureFlags.type] = value;
 
   /// Produces a [Map] that can be serialized to JSON.
   Map<String, dynamic> toJson() {
@@ -246,6 +261,13 @@ class Contexts extends MapView<String, dynamic> {
 
           break;
 
+        case SentryFeatureFlags.type:
+          final flagsMap = flags?.toJson();
+          if (flagsMap?.isNotEmpty ?? false) {
+            json[SentryFeatureFlags.type] = flagsMap;
+          }
+          break;
+
         default:
           if (value != null) {
             json[key] = value;
@@ -256,6 +278,7 @@ class Contexts extends MapView<String, dynamic> {
     return json;
   }
 
+  @Deprecated('Will be removed in a future version.')
   Contexts clone() {
     final copy = Contexts(
       device: device?.clone(),
@@ -268,13 +291,16 @@ class Contexts extends MapView<String, dynamic> {
       response: response?.clone(),
       runtimes: runtimes.map((runtime) => runtime.clone()).toList(),
       feedback: feedback?.clone(),
+      flags: flags?.clone(),
     )..addEntries(
-        entries.where((element) => !_defaultFields.contains(element.key)),
+        entries.where((element) => !defaultFields.contains(element.key)),
       );
 
     return copy;
   }
 
+  @Deprecated(
+      'Will be removed in a future version. Assign values directly to the instance.')
   Contexts copyWith({
     SentryDevice? device,
     SentryOperatingSystem? operatingSystem,
@@ -286,11 +312,13 @@ class Contexts extends MapView<String, dynamic> {
     SentryTraceContext? trace,
     SentryResponse? response,
     SentryFeedback? feedback,
+    SentryFeatureFlags? flags,
   }) =>
       Contexts(
         device: device ?? this.device,
         operatingSystem: operatingSystem ?? this.operatingSystem,
-        runtimes: runtimes ?? this.runtimes,
+        runtimes: runtimes ??
+            List<SentryRuntime>.from(this[SentryRuntime.listType] ?? []),
         app: app ?? this.app,
         browser: browser ?? this.browser,
         gpu: gpu ?? this.gpu,
@@ -298,11 +326,13 @@ class Contexts extends MapView<String, dynamic> {
         trace: trace ?? this.trace,
         response: response ?? this.response,
         feedback: feedback ?? this.feedback,
+        flags: flags ?? this.flags,
       )..addEntries(
-          entries.where((element) => !_defaultFields.contains(element.key)),
+          entries.where((element) => !defaultFields.contains(element.key)),
         );
 
-  static const _defaultFields = [
+  @internal
+  static const defaultFields = [
     SentryApp.type,
     SentryDevice.type,
     SentryOperatingSystem.type,
@@ -314,5 +344,6 @@ class Contexts extends MapView<String, dynamic> {
     SentryTraceContext.type,
     SentryResponse.type,
     SentryFeedback.type,
+    SentryFeatureFlags.type,
   ];
 }

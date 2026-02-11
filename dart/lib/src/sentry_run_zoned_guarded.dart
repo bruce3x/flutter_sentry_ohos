@@ -29,7 +29,7 @@ class SentryRunZonedGuarded {
 
     final sentryZoneSpecification = ZoneSpecification.from(
       zoneSpecification ?? ZoneSpecification(),
-      print: (self, parent, zone, line) async {
+      print: (self, parent, zone, line) {
         final options = hub.options;
 
         if (userPrint != null) {
@@ -47,7 +47,7 @@ class SentryRunZonedGuarded {
           // This happens for example if:
           // - hub.addBreadcrumb() called print() itself
           // - This happens for example if hub.isEnabled == false and
-          //   options.logger == dartLogger
+          //   options.logger == _debugLogger
           //
           // Anyway, in order to not cause a stack overflow due to recursion
           // we drop any further print() call while adding a breadcrumb.
@@ -61,12 +61,12 @@ class SentryRunZonedGuarded {
 
         try {
           _isPrinting = true;
-          await hub.addBreadcrumb(
+          unawaited(hub.addBreadcrumb(
             Breadcrumb.console(
               message: line,
               level: SentryLevel.debug,
             ),
-          );
+          ));
           parent.print(zone, line);
         } finally {
           _isPrinting = false;
@@ -87,7 +87,7 @@ class SentryRunZonedGuarded {
     Object exception,
     StackTrace stackTrace,
   ) async {
-    options.logger(
+    options.log(
       SentryLevel.error,
       'Uncaught zone error',
       logger: 'sentry.runZonedGuarded',

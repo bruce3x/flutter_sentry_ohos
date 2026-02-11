@@ -1,8 +1,0 @@
-{
-  "string": [
-    {
-      "name": "sentry_permission_reason",
-      "value": "Required by Sentry SDK to capture errors and network status."
-    }
-  ]
-}

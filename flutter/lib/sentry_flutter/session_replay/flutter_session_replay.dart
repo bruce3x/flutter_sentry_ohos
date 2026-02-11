@@ -272,9 +272,9 @@ class FlutterSessionReplayRecorder with WidgetsBindingObserver {
           Future<void>.microtask(() {
             _sendFrameToWorker(
               pixels: pixels,
-              width: width,
-              height: height,
-              pixelRatio: pixelRatio,
+        width: width,
+        height: height,
+        pixelRatio: pixelRatio,
       );
           });
         }

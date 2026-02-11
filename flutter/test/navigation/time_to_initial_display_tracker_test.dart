@@ -26,10 +26,9 @@ void main() {
     test(
         'approximation tracking creates and finishes ttid span with correct measurements',
         () async {
-      final transaction = fixture.getTransaction() as SentryTracer;
+      final transaction = fixture.getTransaction();
       await sut.track(
         transaction: transaction,
-        startTimestamp: fixture.startTimestamp,
       );
 
       final children = transaction.children;
@@ -55,52 +54,15 @@ void main() {
               .inMilliseconds);
     });
 
-    test(
-        'manual tracking creates and finishes ttid span with correct measurements',
-        () async {
-      sut.markAsManual();
-      Future.delayed(fixture.finishFrameDuration, () {
-        sut.completeTracking();
-      });
-
-      final transaction = fixture.getTransaction() as SentryTracer;
-      await sut.track(
-        transaction: transaction,
-        startTimestamp: fixture.startTimestamp,
-      );
-
-      final children = transaction.children;
-      expect(children, hasLength(1));
-
-      final ttidSpan = children.first;
-      expect(ttidSpan.context.operation,
-          SentrySpanOperations.uiTimeToInitialDisplay);
-      expect(ttidSpan.finished, isTrue);
-      expect(ttidSpan.context.description, 'Regular route initial display');
-      expect(ttidSpan.origin, SentryTraceOrigins.manualUiTimeToDisplay);
-      final ttidMeasurement =
-          transaction.measurements['time_to_initial_display'];
-      expect(ttidMeasurement, isNotNull);
-      expect(ttidMeasurement?.unit, DurationSentryMeasurementUnit.milliSecond);
-      expect(ttidMeasurement?.value,
-          greaterThanOrEqualTo(fixture.finishFrameDuration.inMilliseconds));
-      expect(
-          ttidMeasurement?.value,
-          ttidSpan.endTimestamp!
-              .difference(ttidSpan.startTimestamp)
-              .inMilliseconds);
-    });
-
     test('starting after completing still finished correctly', () async {
-      await Future.delayed(fixture.finishFrameDuration, () {
-        sut.markAsManual();
-        sut.completeTracking();
-      });
+      final previousTransaction = fixture.getTransaction();
+      await sut.track(
+        transaction: previousTransaction,
+      );
 
-      final transaction = fixture.getTransaction() as SentryTracer;
+      final transaction = fixture.getTransaction();
       await sut.track(
         transaction: transaction,
-        startTimestamp: fixture.startTimestamp,
       );
 
       final children = transaction.children;
@@ -111,7 +73,7 @@ void main() {
           SentrySpanOperations.uiTimeToInitialDisplay);
       expect(ttidSpan.finished, isTrue);
       expect(ttidSpan.context.description, 'Regular route initial display');
-      expect(ttidSpan.origin, SentryTraceOrigins.manualUiTimeToDisplay);
+      expect(ttidSpan.origin, SentryTraceOrigins.autoUiTimeToDisplay);
       final ttidMeasurement =
           transaction.measurements['time_to_initial_display'];
       expect(ttidMeasurement, isNotNull);
@@ -126,13 +88,12 @@ void main() {
     });
 
     test('providing endTimestamp finishes transaction with it', () async {
-      final transaction = fixture.getTransaction() as SentryTracer;
+      final transaction = fixture.getTransaction();
       final endTimestamp =
           fixture.startTimestamp.add(Duration(milliseconds: 100));
 
       await sut.track(
         transaction: transaction,
-        startTimestamp: fixture.startTimestamp,
         endTimestamp: endTimestamp,
       );
 
@@ -142,81 +103,31 @@ void main() {
       final ttidSpan = transaction.children.first;
       expect(endTimestamp, ttidSpan.endTimestamp);
 
-      final ttidMeasurement =
-          transaction.measurements['time_to_initial_display'];
-
-      expect(ttidMeasurement, isNotNull);
-      expect(ttidMeasurement?.unit, DurationSentryMeasurementUnit.milliSecond);
-      expect(ttidMeasurement?.value, greaterThanOrEqualTo(100));
-    });
-
-    test('providing endTimestamp sets endTimestamp ivar', () async {
-      final transaction = fixture.getTransaction() as SentryTracer;
-      final endTimestamp = fixture.startTimestamp.add(Duration(seconds: 1));
-
-      await sut.track(
-        transaction: transaction,
-        startTimestamp: fixture.startTimestamp,
-        endTimestamp: endTimestamp,
-      );
-
-      expect(sut.endTimestamp, endTimestamp);
+      expect(transaction.measurements, isNotEmpty);
     });
   });
 
-  group('determineEndtime', () {
-    test('can complete as null in approximation mode with timeout', () async {
-      final futureEndTime = await fixture
-          .getSut(triggerApproximationTimeout: true)
-          .determineEndTime();
+  test(
+      'span finishes automatically after timeout with deadline_exceeded status',
+      () async {
+    final transaction = fixture.getTransaction();
+    sut = fixture.getSut(triggerApproximationTimeout: true);
 
-      expect(futureEndTime, null);
-    });
+    final ttidSpan = await sut.track(transaction: transaction);
 
-    test('can complete as null in manual mode with timeout', () async {
-      final sut = fixture.getSut();
-      sut.markAsManual();
-      // Not calling completeTracking() triggers the manual timeout
+    final children = transaction.children;
+    expect(children, hasLength(1));
+    expect(ttidSpan, children.first);
+    expect(ttidSpan, isNotNull);
 
-      final futureEndTime = await sut.determineEndTime();
+    expect(ttidSpan?.context.operation,
+        SentrySpanOperations.uiTimeToInitialDisplay);
+    expect(ttidSpan?.finished, isTrue);
+    expect(ttidSpan?.status, equals(SpanStatus.deadlineExceeded()));
+    expect(ttidSpan?.context.description, 'Regular route initial display');
+    expect(ttidSpan?.origin, SentryTraceOrigins.autoUiTimeToDisplay);
 
-      expect(futureEndTime, null);
-    });
-
-    test('can complete automatically in approximation mode', () async {
-      final futureEndTime = await sut.determineEndTime();
-
-      expect(futureEndTime, isNotNull);
-    });
-
-    test('can complete manually in manual mode', () async {
-      sut.markAsManual();
-      Future<void>.delayed(Duration(milliseconds: 1), () {
-        sut.completeTracking();
-      });
-      final futureEndTime = await sut.determineEndTime();
-
-      expect(futureEndTime, isNotNull);
-    });
-
-    test('returns the correct approximation end time', () async {
-      final endTme = await sut.determineEndTime();
-
-      expect(endTme?.difference(fixture.startTimestamp).inSeconds,
-          fixture.finishFrameDuration.inSeconds);
-    });
-
-    test('returns the correct manual end time', () async {
-      sut.markAsManual();
-      Future.delayed(fixture.finishFrameDuration, () {
-        sut.completeTracking();
-      });
-
-      final endTime = await sut.determineEndTime();
-
-      expect(endTime?.difference(fixture.startTimestamp).inSeconds,
-          fixture.finishFrameDuration.inSeconds);
-    });
+    expect(transaction.measurements, isEmpty);
   });
 }
 
@@ -225,9 +136,13 @@ class Fixture {
   final hub = Hub(defaultTestOptions()..tracesSampleRate = 1.0);
   final fakeFrameCallbackHandler = FakeFrameCallbackHandler();
 
-  ISentrySpan getTransaction({String? name = "Regular route"}) {
-    return hub.startTransaction(name!, 'ui.load',
-        bindToScope: true, startTimestamp: startTimestamp);
+  SentryTracer getTransaction({String? name = "Regular route"}) {
+    return hub.startTransaction(
+      name!,
+      'ui.load',
+      bindToScope: true,
+      startTimestamp: startTimestamp,
+    ) as SentryTracer;
   }
 
   /// The time it takes until a fake frame has been triggered
@@ -236,9 +151,11 @@ class Fixture {
   TimeToInitialDisplayTracker getSut(
       {bool triggerApproximationTimeout = false}) {
     return TimeToInitialDisplayTracker(
-        frameCallbackHandler: triggerApproximationTimeout
-            ? DefaultFrameCallbackHandler()
-            : FakeFrameCallbackHandler(
-                postFrameCallbackDelay: finishFrameDuration));
+      frameCallbackHandler: triggerApproximationTimeout
+          ? DefaultFrameCallbackHandler()
+          : FakeFrameCallbackHandler(
+              postFrameCallbackDelay: finishFrameDuration,
+            ),
+    );
   }
 }

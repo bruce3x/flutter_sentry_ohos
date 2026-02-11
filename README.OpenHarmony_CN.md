@@ -86,14 +86,16 @@ runApp(
 
 在以下版本中已测试通过
 
-1. Flutter: 3.22.1-ohos-1.0.7; SDK: 5.0.0(12); IDE: DevEco Studio: 5.1.0.828; ROM: 5.1.0.130 SP8;
+1. Flutter: 3.27.5-ohos-1.0.1; SDK: 5.0.0(12); IDE: DevEco Studio: 5.1.0.828; ROM: 5.1.0.130 SP8;
+2. Flutter: 3.35.8-ohos-0.0.2; SDK: 5.0.0(12); IDE: DevEco Studio: 5.1.0.828; ROM: 5.1.0.130 SP8; 
 
 ### 2.2 OpenHarmony 平台限制说明
 
 由于 ohos 系统架构差异，当前实现了 sentry-dart 基础的事件上报功能。
 
 - **NDK 崩溃捕获**：依赖 sentry-native 的 OpenHarmony 适配实现，可捕获原生崩溃但暂不支持符号化解析。
-- **Session Replay**：会话回放功能可用，受限于系统权限仅支持应用内视图捕获，不支持系统级截图。
+- **截图附件（attachScreenshot）**：不支持。截图操作在 UI 线程同步执行，在 OHOS 上耗时过长会触发 ANR。
+- **Session Replay（会话回放）**：不支持。OHOS 原生截图 API 在主线程同步阻塞，导致 ANR。
 - **HTTP 客户端**：Sentry SDK 使用 ArkTS 原生 HTTP 模块，不支持自动拦截第三方网络库请求。
 - **文件缓存**：离线事件缓存使用应用沙箱目录，受系统存储配额限制。
 - **电池状态监听**：电池温度等部分字段依赖系统 API 支持，可能返回默认值。
@@ -162,7 +164,8 @@ runApp(
 | Activity 生命周期追踪 | 自动追踪 Ability 生命周期性能                | 启用                                  | yes          |
 | HTTP 请求面包屑       | 自动记录 HTTP 请求作为面包屑                 | 启用                                  | yes          |
 | HTTP 请求追踪         | HTTP 请求性能追踪                            | 禁用（可配置启用）                    | yes          |
-| Session Replay        | 会话录制与回放                               | 支持                                  | yes          |
+| 截图附件（attachScreenshot）| 事件发生时附加屏幕截图                       | 禁用（ANR：toImage 阻塞主线程）      | no           |
+| Session Replay        | 会话录制与回放                               | 禁用（ANR：window.snapshot 阻塞主线程）| no           |
 | 全局错误捕获          | 自动捕获未处理的异常和 Promise 拒绝          | 启用                                  | yes          |
 
 ## 4. 遗留问题

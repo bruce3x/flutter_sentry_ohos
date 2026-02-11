@@ -1,4 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="io.sentry.samples.flutter">
 
     <uses-permission android:name="android.permission.INTERNET" />
@@ -9,6 +10,7 @@
         android:label="sentry_flutter_example"
         android:icon="@mipmap/ic_launcher"
         android:extractNativeLibs="true"
+
         android:networkSecurityConfig="@xml/network">
         <activity
             android:name=".MainActivity"

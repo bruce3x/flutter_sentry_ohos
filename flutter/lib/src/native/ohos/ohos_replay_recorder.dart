@@ -7,10 +7,9 @@ import 'package:meta/meta.dart';
 import '../../../sentry_flutter.dart';
 import '../../replay/scheduled_recorder.dart';
 import '../../replay/scheduled_recorder_config.dart';
-import '../../screenshot/recorder.dart';
+import '../../screenshot/screenshot.dart';
 import '../../screenshot/sentry_screenshot_widget.dart';
 import '../../../sentry_flutter/session_replay/flutter_session_replay.dart';
-import '../sentry_safe_method_channel.dart';
 
 /// HarmonyOS implementation of the scheduled screenshot replay recorder.
 ///
@@ -20,19 +19,11 @@ import '../sentry_safe_method_channel.dart';
 /// MethodChannel handled by ETS (`SentryFlutterPlugin.ets`).
 @internal
 class OhosReplayRecorder extends ScheduledScreenshotRecorder {
-  // @internal // visible for testing, used by SentryNativeOhos
-  // static OhosReplayRecorder Function(SentryFlutterOptions) factory =
-  //     OhosReplayRecorder.new;
+  @internal // visible for testing, used by SentryNativeOhos
+  static OhosReplayRecorder Function(SentryFlutterOptions) factory =
+      OhosReplayRecorder.new;
 
-  final SentrySafeMethodChannel _channel;
-  final String _cacheDir;
-
-  OhosReplayRecorder(
-      ScheduledScreenshotRecorderConfig config,
-      SentryFlutterOptions options,
-      this._channel,
-      this._cacheDir)
-      : super(config, options) {
+  OhosReplayRecorder(super.options) {
     super.callback = _addReplayScreenshot;
   }
 
@@ -70,14 +61,14 @@ class OhosReplayRecorder extends ScheduledScreenshotRecorder {
   }
 
   @override
-  void start() {
+  Future<void> start() async {
     _isRunning = true;
     if (_useFlutterRecorder) {
       _ensureFlutterRecorder();
       _flutterRecorder?.start();
       return;
     }
-    super.start();
+    await super.start();
   }
 
   @override
@@ -113,8 +104,23 @@ class OhosReplayRecorder extends ScheduledScreenshotRecorder {
     await super.resume();
   }
 
+  @override
+  Future<void> onConfigurationChanged(
+      ScheduledScreenshotRecorderConfig config) async {
+    await super.onConfigurationChanged(config);
+    if (_useFlutterRecorder) {
+      final wasRunning = _isRunning;
+      _flutterRecorder?.stop();
+      _ensureFlutterRecorder();
+      if (wasRunning) {
+        _flutterRecorder?.start();
+      }
+      _isRunning = wasRunning;
+    }
+  }
+
   Future<void> _addReplayScreenshot(
-      ScreenshotPng screenshot, bool isNewlyCaptured) async {
+      Screenshot screenshot, bool isNewlyCaptured) async {
     if (_useFlutterRecorder) {
       return;
     }
@@ -123,9 +129,10 @@ class OhosReplayRecorder extends ScheduledScreenshotRecorder {
     try {
       // Convert RGBA buffer into a byte list; ETS/native side will handle
       // encoding/aggregation as appropriate.
-      final bytes = screenshot.data.buffer.asUint8List();
+      final data = await screenshot.rawRgbaData;
+      final bytes = data.buffer.asUint8List();
 
-      options.logger(
+      options.log(
         SentryLevel.debug,
         '$logName: captured screenshot ('
         '${screenshot.width}x${screenshot.height} pixels, '
@@ -133,7 +140,7 @@ class OhosReplayRecorder extends ScheduledScreenshotRecorder {
       );
       await _forwardFrame(bytes, screenshot.width, screenshot.height, timestamp);
     } catch (error, stackTrace) {
-      options.logger(
+      options.log(
         SentryLevel.error,
         '$logName: OHOS replay screenshot processing failed',
         exception: error,
@@ -169,13 +176,13 @@ class OhosReplayRecorder extends ScheduledScreenshotRecorder {
         await _frameChannel.invokeMethod<void>('pushFrame', payload);
       }
     } on PlatformException catch (exception, stackTrace) {
-      options.logger(
+      options.log(
         SentryLevel.error,
         '$logName: pushFrame failed (${exception.message})',
         stackTrace: stackTrace,
       );
     } catch (error, stackTrace) {
-      options.logger(
+      options.log(
         SentryLevel.error,
         '$logName: pushFrame unexpected error',
         exception: error,
@@ -184,3 +191,5 @@ class OhosReplayRecorder extends ScheduledScreenshotRecorder {
     }
   }
 }
+
+

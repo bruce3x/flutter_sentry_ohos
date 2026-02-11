@@ -1,13 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'client_reports/client_report.dart';
-import 'metrics/metric.dart';
 import 'protocol.dart';
 import 'sentry_attachment/sentry_attachment.dart';
 import 'sentry_envelope_item_header.dart';
 import 'sentry_item_type.dart';
-import 'sentry_user_feedback.dart';
 import 'utils.dart';
 
 /// Item holding header information and JSON encoded data.
@@ -24,8 +21,10 @@ class SentryEnvelopeItem {
       contentType: 'application/json',
     );
     return SentryEnvelopeItem(
-        header, () => utf8JsonEncoder.convert(sanitizeForJson(transaction.toJson()) as Object),
-        originalObject: transaction);
+      header,
+      () => utf8JsonEncoder.convert(sanitizeForJson(transaction.toJson()) as Object),
+      originalObject: transaction,
+    );
   }
 
   factory SentryEnvelopeItem.fromAttachment(SentryAttachment attachment) {
@@ -39,22 +38,6 @@ class SentryEnvelopeItem {
       header,
       () => attachment.bytes,
       originalObject: attachment,
-    );
-  }
-
-  /// Create a [SentryEnvelopeItem] which sends [SentryUserFeedback].
-  @Deprecated('Will be removed in a future version.')
-  factory SentryEnvelopeItem.fromUserFeedback(SentryUserFeedback feedback) {
-    final dataFactory = () => utf8JsonEncoder.convert(feedback.toJson());
-
-    final header = SentryEnvelopeItemHeader(
-      SentryItemType.userFeedback,
-      contentType: 'application/json',
-    );
-    return SentryEnvelopeItem(
-      header,
-      dataFactory,
-      originalObject: feedback,
     );
   }
 
@@ -82,27 +65,18 @@ class SentryEnvelopeItem {
     );
   }
 
-  /// Creates a [SentryEnvelopeItem] which holds several [Metric] data.
-  factory SentryEnvelopeItem.fromMetrics(Map<int, Iterable<Metric>> buckets) {
-    final dataFactory = () {
-      final statsd = StringBuffer();
-      // Encode all metrics of a bucket in statsd format, using the bucket key,
-      //  which is the timestamp of the bucket.
-      for (final bucket in buckets.entries) {
-        final encodedMetrics =
-            bucket.value.map((metric) => metric.encodeToStatsd(bucket.key));
-        statsd.write(encodedMetrics.join('\n'));
-      }
-      return utf8.encode(statsd.toString());
+  factory SentryEnvelopeItem.fromLogs(List<SentryLog> items) {
+    final payload = {
+      'items': items.map((e) => e.toJson()).toList(),
     };
-    final header = SentryEnvelopeItemHeader(
-      SentryItemType.statsd,
-      contentType: 'application/octet-stream',
-    );
     return SentryEnvelopeItem(
-      header,
-      dataFactory,
-      originalObject: buckets,
+      SentryEnvelopeItemHeader(
+        SentryItemType.log,
+        itemCount: items.length,
+        contentType: 'application/vnd.sentry.items.log+json',
+      ),
+      () => utf8JsonEncoder.convert(payload),
+      originalObject: payload,
     );
   }
 

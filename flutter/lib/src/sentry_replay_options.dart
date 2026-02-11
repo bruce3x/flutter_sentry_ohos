@@ -1,7 +1,8 @@
 import 'package:meta/meta.dart';
 
-/// Configuration of the experimental replay feature.
-@experimental
+import 'replay/replay_quality.dart';
+
+/// Configuration of the replay feature.
 class SentryReplayOptions {
   double? _sessionSampleRate;
 
@@ -24,6 +25,11 @@ class SentryReplayOptions {
     assert(value == null || (value >= 0 && value <= 1));
     _onErrorSampleRate = value;
   }
+
+  ///  Defines the image quality of the session replay. The higher the quality,
+  ///  the more accurate the replay will be, but also more data to transfer and
+  /// more CPU load, defaults to MEDIUM.
+  var quality = SentryReplayQuality.medium;
 
   @internal
   bool get isEnabled =>
