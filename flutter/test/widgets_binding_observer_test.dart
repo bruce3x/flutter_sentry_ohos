@@ -1,10 +1,16 @@
+// ignore_for_file: invalid_use_of_internal_member
+
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
+import 'package:sentry/src/platform/mock_platform.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:sentry_flutter/src/widgets_binding_observer.dart';
+
+import 'package:sentry/src/sentry_log_batcher.dart';
 
 import 'mocks.dart';
 import 'mocks.mocks.dart';
@@ -25,6 +31,105 @@ void main() {
         ..bindingUtils = TestBindingWrapper();
       flutterTrackingDisabledOptions.useNativeBreadcrumbTracking();
     });
+
+    Future<void> sendLifecycle(String event) async {
+      final messenger =
+          TestWidgetsFlutterBinding.ensureInitialized().defaultBinaryMessenger;
+      final message =
+          const StringCodec().encodeMessage('AppLifecycleState.$event');
+      await messenger.handlePlatformMessage(
+          'flutter/lifecycle', message, (_) {});
+    }
+
+    testWidgets(
+        'app lifecycle does not generate new trace if SentryNavigatorObserver is used',
+        (WidgetTester tester) async {
+      SentryNavigatorObserver();
+      flutterTrackingDisabledOptions.appInBackgroundTracingThreshold =
+          Duration(seconds: -1);
+      final hub = MockHub();
+      final observer = SentryWidgetsBindingObserver(
+        hub: hub,
+        options: flutterTrackingDisabledOptions,
+        isNavigatorObserverCreated: () => true,
+      );
+      final instance = flutterTrackingDisabledOptions.bindingUtils.instance!;
+      instance.addObserver(observer);
+
+      await sendLifecycle('inactive');
+      await sendLifecycle('resumed');
+
+      verifyNever(hub.generateNewTrace());
+    });
+
+    testWidgets('app lifecycle does not generate new trace if platform is web',
+        (WidgetTester tester) async {
+      flutterTrackingDisabledOptions.platform = MockPlatform(isWeb: true);
+      flutterTrackingDisabledOptions.appInBackgroundTracingThreshold =
+          Duration(seconds: -1);
+      final hub = MockHub();
+      final observer = SentryWidgetsBindingObserver(
+        hub: hub,
+        options: flutterTrackingDisabledOptions,
+        isNavigatorObserverCreated: () => false,
+      );
+      final instance = flutterTrackingDisabledOptions.bindingUtils.instance!;
+      instance.addObserver(observer);
+
+      await sendLifecycle('inactive');
+      await sendLifecycle('resumed');
+
+      verifyNever(hub.generateNewTrace());
+    });
+
+    testWidgets(
+        'app lifecycle generates new trace if SentryNavigatorObserver is not used and platform is not web',
+        (WidgetTester tester) async {
+      flutterTrackingDisabledOptions.platform = MockPlatform(isWeb: false);
+      flutterTrackingDisabledOptions.appInBackgroundTracingThreshold =
+          Duration(seconds: -1);
+      final hub = MockHub();
+      when(hub.generateNewTrace()).thenAnswer((_) {});
+      final observer = SentryWidgetsBindingObserver(
+        hub: hub,
+        options: flutterTrackingDisabledOptions,
+        isNavigatorObserverCreated: () => false,
+      );
+      final instance = flutterTrackingDisabledOptions.bindingUtils.instance!;
+      instance.addObserver(observer);
+
+      await sendLifecycle('inactive');
+      await sendLifecycle('resumed');
+
+      verify(hub.generateNewTrace()).called(1);
+    });
+
+    testWidgets(
+        'on supported platforms when app lifecycle tracing enabled is enabled, only inactive and resumed are tracked',
+        (WidgetTester tester) async {
+      flutterTrackingDisabledOptions.platform = MockPlatform(isWeb: false);
+      flutterTrackingDisabledOptions.appInBackgroundTracingThreshold =
+          Duration(seconds: -1);
+      final hub = MockHub();
+      when(hub.generateNewTrace()).thenAnswer((_) {});
+      final observer = SentryWidgetsBindingObserver(
+        hub: hub,
+        options: flutterTrackingDisabledOptions,
+        isNavigatorObserverCreated: () => false,
+      );
+      final instance = flutterTrackingDisabledOptions.bindingUtils.instance!;
+      instance.addObserver(observer);
+
+      await sendLifecycle('detached');
+      await sendLifecycle('resumed');
+
+      verifyNever(hub.generateNewTrace());
+
+      await sendLifecycle('inactive');
+      await sendLifecycle('resumed');
+
+      verify(hub.generateNewTrace()).called(1);
+    }, skip: kIsWeb);
 
     testWidgets('memory pressure breadcrumb', (WidgetTester tester) async {
       final hub = MockHub();
@@ -83,15 +188,6 @@ void main() {
     });
 
     testWidgets('lifecycle breadcrumbs', (WidgetTester tester) async {
-      Future<void> sendLifecycle(String event) async {
-        final messenger = TestWidgetsFlutterBinding.ensureInitialized()
-            .defaultBinaryMessenger;
-        final message =
-            const StringCodec().encodeMessage('AppLifecycleState.$event');
-        await messenger.handlePlatformMessage(
-            'flutter/lifecycle', message, (_) {});
-      }
-
       Map<String, String> mapForLifecycle(String state) {
         return <String, String>{'state': state};
       }
@@ -150,15 +246,6 @@ void main() {
     });
 
     testWidgets('disable lifecycle breadcrumbs', (WidgetTester tester) async {
-      Future<void> sendLifecycle(String event) async {
-        final messenger = TestWidgetsFlutterBinding.ensureInitialized()
-            .defaultBinaryMessenger;
-        final message =
-            const StringCodec().encodeMessage('AppLifecycleState.$event');
-        await messenger.handlePlatformMessage(
-            'flutter/lifecycle', message, (_) {});
-      }
-
       final hub = MockHub();
 
       final observer = SentryWidgetsBindingObserver(
@@ -477,5 +564,46 @@ void main() {
 
       instance.removeObserver(observer);
     });
+
+    testWidgets(
+        'calls flush on logs batcher when transitioning to inactive state',
+        (WidgetTester tester) async {
+      final hub = MockHub();
+
+      final mockLogBatcher = MockLogBatcher();
+
+      final options = defaultTestOptions();
+      options.platform = MockPlatform(isWeb: false);
+      options.bindingUtils = TestBindingWrapper();
+
+      options.logBatcher = mockLogBatcher;
+      options.enableLogs = true;
+
+      final observer = SentryWidgetsBindingObserver(
+        hub: hub,
+        options: options,
+        isNavigatorObserverCreated: () => false,
+      );
+      final instance = options.bindingUtils.instance!;
+      instance.addObserver(observer);
+
+      await sendLifecycle('inactive');
+
+      expect(mockLogBatcher.flushCalled, true);
+
+      instance.removeObserver(observer);
+    });
   });
+}
+
+class MockLogBatcher implements SentryLogBatcher {
+  var flushCalled = false;
+
+  @override
+  void addLog(SentryLog log) {}
+
+  @override
+  Future<void> flush() async {
+    flushCalled = true;
+  }
 }

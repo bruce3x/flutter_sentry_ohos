@@ -205,6 +205,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:meta/meta.dart';
+// ignore: implementation_imports
+import 'package:sentry/src/sentry_tracer.dart';
 
 import '../../sentry_flutter.dart';
 import '../widget_utils.dart';
@@ -298,7 +300,7 @@ class _SentryUserInteractionWidgetState
       _lastPointerId = event.pointer;
       _lastPointerDownLocation = event.localPosition;
     } catch (exception, stacktrace) {
-      _options?.logger(
+      _options?.log(
         SentryLevel.error,
         'Error while handling pointer-down event $event in $SentryUserInteractionWidget',
         exception: exception,
@@ -328,7 +330,7 @@ class _SentryUserInteractionWidgetState
         _onTappedAt(event.localPosition);
       }
     } catch (exception, stacktrace) {
-      _options?.logger(
+      _options?.log(
         SentryLevel.error,
         'Error while handling pointer-up event $event in $SentryUserInteractionWidget',
         exception: exception,
@@ -428,18 +430,22 @@ class _SentryUserInteractionWidgetState
           lastElement?.widget == element.widget &&
           !activeTransaction.finished) {
         // ignore: invalid_use_of_internal_member
-        activeTransaction.scheduleFinish();
-        return;
+        if (activeTransaction is SentryTracer &&
+            activeTransaction.children.isNotEmpty) {
+          activeTransaction.finish();
+        } else {
+          activeTransaction.finish(status: SpanStatus.cancelled());
+        }
       } else {
         activeTransaction.finish();
-        _hub.configureScope((scope) {
-          if (scope.span == activeTransaction) {
-            scope.span = null;
-          }
-        });
-        _activeTransaction = null;
-        _lastTappedWidget = null;
       }
+      _hub.configureScope((scope) {
+        if (scope.span == activeTransaction) {
+          scope.span = null;
+        }
+      });
+      _activeTransaction = null;
+      _lastTappedWidget = null;
     }
 
     _lastTappedWidget = info;
@@ -535,10 +541,14 @@ class _SentryUserInteractionWidgetState
         return;
       }
 
+      // Skip elements that don't have a valid render object or whose
+      // render box hasn't been laid out yet.
       final renderObject = element.renderObject;
-      if (renderObject == null) {
+      if (renderObject == null ||
+          (renderObject is RenderBox && !renderObject.hasSize)) {
         return;
       }
+
       var hitFound = true;
       if (renderObject is RenderPointerListener) {
         final hitResult = BoxHitTestResult();
@@ -613,21 +623,6 @@ class _SentryUserInteractionWidgetState
     if (element == null) {
       return false;
     }
-    try {
-      // ignore: return_of_invalid_type
-      return (element as dynamic).mounted;
-    } on NoSuchMethodError catch (_) {
-      // mounted checks if the widget is not null.
-
-      try {
-        // Flutter 3.0.0 does `_widget!` and if `_widget` is null it throws.
-
-        // ignore: unnecessary_null_comparison
-        return element.widget != null;
-      } catch (_) {
-        // if it throws, the `_widget` is null and not mounted.
-        return false;
-      }
-    }
+    return element.mounted;
   }
 }

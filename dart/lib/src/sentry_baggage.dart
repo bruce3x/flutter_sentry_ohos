@@ -1,21 +1,23 @@
 import 'package:meta/meta.dart';
-import 'scope.dart';
-import 'protocol.dart';
 
+import 'protocol.dart';
+import 'scope.dart';
 import 'sentry_options.dart';
 
 class SentryBaggage {
   static const String _sampleRateKeyName = 'sentry-sample_rate';
+  static const String _sampleRandKeyName = 'sentry-sample_rand';
+
   static const int _maxChars = 8192;
   static const int _maxListMember = 64;
 
   SentryBaggage(
     this._keyValues, {
-    this.logger,
+    this.log,
   });
 
   final Map<String, String> _keyValues;
-  final SentryLogger? logger;
+  final SdkLogCallback? log;
 
   String toHeaderString() {
     final buffer = StringBuffer();
@@ -24,7 +26,7 @@ class SentryBaggage {
 
     for (final entry in _keyValues.entries) {
       if (listMemberCount >= _maxListMember) {
-        logger?.call(
+        log?.call(
           SentryLevel.info,
           'Baggage key ${entry.key} dropped because of max list member.',
         );
@@ -38,7 +40,7 @@ class SentryBaggage {
         final totalLengthIfValueAdded = buffer.length + encodedKeyValue.length;
 
         if (totalLengthIfValueAdded >= _maxChars) {
-          logger?.call(
+          log?.call(
             SentryLevel.info,
             'Baggage key ${entry.key} dropped because of max baggage chars.',
           );
@@ -49,7 +51,7 @@ class SentryBaggage {
         buffer.write(encodedKeyValue);
         separator = ',';
       } catch (exception, stackTrace) {
-        logger?.call(
+        log?.call(
           SentryLevel.error,
           'Failed to parse the baggage key ${entry.key}.',
           exception: exception,
@@ -64,35 +66,35 @@ class SentryBaggage {
 
   factory SentryBaggage.fromHeaderList(
     List<String> headerValues, {
-    SentryLogger? logger,
+    SdkLogCallback? log,
   }) {
     final keyValues = <String, String>{};
 
     for (final headerValue in headerValues) {
       final keyValuesToAdd = _extractKeyValuesFromBaggageString(
         headerValue,
-        logger: logger,
+        log: log,
       );
       keyValues.addAll(keyValuesToAdd);
     }
 
-    return SentryBaggage(keyValues, logger: logger);
+    return SentryBaggage(keyValues, log: log);
   }
 
   factory SentryBaggage.fromHeader(
     String headerValue, {
-    SentryLogger? logger,
+    SdkLogCallback? log,
   }) {
     final keyValues = _extractKeyValuesFromBaggageString(
       headerValue,
-      logger: logger,
+      log: log,
     );
 
-    return SentryBaggage(keyValues, logger: logger);
+    return SentryBaggage(keyValues, log: log);
   }
 
   @internal
-  setValuesFromScope(Scope scope, SentryOptions options) {
+  void setValuesFromScope(Scope scope, SentryOptions options) {
     final propagationContext = scope.propagationContext;
     setTraceId(propagationContext.traceId.toString());
     setPublicKey(options.parsedDsn.publicKey);
@@ -105,11 +107,6 @@ class SentryBaggage {
     if (scope.user?.id != null) {
       setUserId(scope.user!.id!);
     }
-    // ignore: deprecated_member_use_from_same_package
-    if (scope.user?.segment != null) {
-      // ignore: deprecated_member_use_from_same_package
-      setUserSegment(scope.user!.segment!);
-    }
     if (scope.replayId != null && scope.replayId != SentryId.empty()) {
       setReplayId(scope.replayId.toString());
     }
@@ -117,7 +114,7 @@ class SentryBaggage {
 
   static Map<String, String> _extractKeyValuesFromBaggageString(
     String headerValue, {
-    SentryLogger? logger,
+    SdkLogCallback? log,
   }) {
     final keyValues = <String, String>{};
 
@@ -133,7 +130,7 @@ class SentryBaggage {
           final value = _urlDecode(keyAndValue.last.trim());
           keyValues[key] = value;
         } catch (exception, stackTrace) {
-          logger?.call(
+          log?.call(
             SentryLevel.error,
             'Failed to parse the baggage entry $keyAndValue.',
             exception: exception,
@@ -180,18 +177,16 @@ class SentryBaggage {
     set('sentry-user_id', value);
   }
 
-  @Deprecated(
-      'Will be removed in v9 since functionality has been removed from Sentry')
-  void setUserSegment(String value) {
-    set('sentry-user_segment', value);
-  }
-
   void setTransaction(String value) {
     set('sentry-transaction', value);
   }
 
   void setSampleRate(String value) {
     set(_sampleRateKeyName, value);
+  }
+
+  void setSampleRand(String value) {
+    set(_sampleRandKeyName, value);
   }
 
   void setSampled(String value) {
@@ -205,6 +200,15 @@ class SentryBaggage {
     }
 
     return double.tryParse(sampleRate);
+  }
+
+  double? getSampleRand() {
+    final sampleRand = get(_sampleRandKeyName);
+    if (sampleRand == null) {
+      return null;
+    }
+
+    return double.tryParse(sampleRand);
   }
 
   void setReplayId(String value) => set('sentry-replay_id', value);

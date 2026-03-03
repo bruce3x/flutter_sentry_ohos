@@ -26,8 +26,13 @@ export class SentryOptions {
   serverName?: string = '';
   transportFactory?: ITransportFactory | null = null;
   cacheDirPath?: string | null = null;
-  maxCacheItems?: number = 30; // 最大缓存事件数量（与 Android SDK 对齐）
   maxBreadcrumbs: number = 100;
+  /**
+   * Maximum number of cached events/envelopes to keep in offline storage.
+   * When the limit is reached, the oldest events will be deleted to make room for new ones.
+   * Default is 30 (aligned with Android SDK).
+   */
+  maxCacheItems: number = 30;
   sdkName: string | null = null;
   // 新增：性能与客户端报告
   autoCommitTransactions?: boolean; // 默认 true

@@ -14,14 +14,22 @@
  */
 
 export class SamplingConfig {
-  public sampleRate: number = 0.1;   // 10%
-  public onErrorSampleRate: number = 1.0;   // 100%
-  public sessionSampleRate: number = 0.0;   // Android 对齐：全会话采样率
-  public frameRate: number = 5; // fps
-  public sessionDurationMs: number = 1000 * 60 * 60; // 1h
-  public sessionSegmentDurationMs: number = 1000 * 60; // 1m
-  public errorReplayDurationMs: number = 1000 * 30; // 30s
-  public maxScreenFrames: number = 30; // 限制内存占用：最多保留 30 帧
+  // 10%
+  public sampleRate: number = 0.1;
+  // 100%
+  public onErrorSampleRate: number = 1.0;
+  // Android 对齐：全会话采样率
+  public sessionSampleRate: number = 0.0;
+  // fps
+  public frameRate: number = 5;
+  // 1h
+  public sessionDurationMs: number = 1000 * 60 * 60;
+  // 1m
+  public sessionSegmentDurationMs: number = 1000 * 60;
+  // 30s
+  public errorReplayDurationMs: number = 1000 * 30;
+  // 限制内存占用：最多保留 30 帧
+  public maxScreenFrames: number = 30;
 
   constructor(rate: number = 1.0) {
     this.sampleRate = Math.min(Math.max(rate, 0), 1);

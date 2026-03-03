@@ -1,11 +1,9 @@
-import 'dart:ui';
-
-import 'package:flutter/widgets.dart';
 import 'package:sentry/sentry.dart';
-import '../sentry_flutter_options.dart';
-
 // ignore: implementation_imports
 import 'package:sentry/src/utils/stacktrace_utils.dart';
+
+import '../sentry_flutter_options.dart';
+import '../utils/platform_dispatcher_wrapper.dart';
 
 typedef ErrorCallback = bool Function(Object exception, StackTrace stackTrace);
 
@@ -14,7 +12,6 @@ typedef ErrorCallback = bool Function(Object exception, StackTrace stackTrace);
 /// - https://api.flutter.dev/flutter/dart-ui/PlatformDispatcher/onError.html
 ///
 /// Remarks:
-/// - Only usable on Flutter >= 3.3.0.
 /// - Does not work on Flutter Web
 ///
 /// This is used instead of [RunZonedGuardedIntegration]. Not using the
@@ -26,11 +23,9 @@ class OnErrorIntegration implements Integration<SentryFlutterOptions> {
   ErrorCallback? _defaultOnError;
   ErrorCallback? _integrationOnError;
   PlatformDispatcherWrapper? dispatchWrapper;
-  SentryFlutterOptions? _options;
 
   @override
   void call(Hub hub, SentryFlutterOptions options) {
-    _options = options;
     final binding = options.bindingUtils.instance;
 
     if (binding == null) {
@@ -44,15 +39,20 @@ class OnErrorIntegration implements Integration<SentryFlutterOptions> {
     _defaultOnError = wrapper.onError;
 
     _integrationOnError = (Object exception, StackTrace stackTrace) {
-      _options!.logger(
-        SentryLevel.error,
-        "Uncaught Platform Error",
-        logger: 'sentry.platformError',
-        exception: exception,
-        stackTrace: stackTrace,
-      );
-
-      final handled = _defaultOnError?.call(exception, stackTrace) ?? true;
+      final handled = _defaultOnError?.call(exception, stackTrace) ?? false;
+      // If the original `onError` callback returned `true` the framework
+      // treats the exception as already handled and suppresses the default
+      // error printing. To make sure these exceptions are still visible
+      // to developers (and to Sentry), we log them explicitly here.
+      if (handled) {
+        options.log(
+          SentryLevel.error,
+          'Uncaught Platform Error',
+          logger: 'sentry.platformError',
+          exception: exception,
+          stackTrace: stackTrace,
+        );
+      }
 
       // As per docs, the app might crash on some platforms
       // after this is called.
@@ -97,58 +97,11 @@ class OnErrorIntegration implements Integration<SentryFlutterOptions> {
 
   @override
   void close() {
-    if (!(dispatchWrapper?.isOnErrorSupported(_options!) == true)) {
-      // bail out
-      return;
-    }
-
     /// Restore default if the integration error is still set.
     if (dispatchWrapper?.onError == _integrationOnError) {
       dispatchWrapper?.onError = _defaultOnError;
       _defaultOnError = null;
       _integrationOnError = null;
     }
-  }
-}
-
-/// This class wraps the `this as dynamic` hack in a type-safe manner.
-/// It helps to introduce code, which uses newer features from Flutter
-/// without breaking Sentry on older versions of Flutter.
-// Should not become part of public API.
-@visibleForTesting
-class PlatformDispatcherWrapper {
-  PlatformDispatcherWrapper(this._dispatcher);
-
-  final PlatformDispatcher? _dispatcher;
-
-  /// Should not be accessed if [isOnErrorSupported] == false
-  ErrorCallback? get onError =>
-      (_dispatcher as dynamic)?.onError as ErrorCallback?;
-
-  /// Should not be accessed if [isOnErrorSupported] == false
-  set onError(ErrorCallback? callback) {
-    (_dispatcher as dynamic)?.onError = callback;
-  }
-
-  bool isOnErrorSupported(SentryFlutterOptions options) {
-    try {
-      onError;
-    } on NoSuchMethodError {
-      // This error is expected on pre 3.1 Flutter version
-      return false;
-    } catch (exception, stacktrace) {
-      // This error is neither expected on pre 3.1 nor on >= 3.1 Flutter versions
-      options.logger(
-        SentryLevel.debug,
-        'An unexpected exception was thrown, please create an issue at https://github.com/getsentry/sentry-dart/issues',
-        exception: exception,
-        stackTrace: stacktrace,
-      );
-      if (options.automatedTestMode) {
-        rethrow;
-      }
-      return false;
-    }
-    return true;
   }
 }

@@ -1,14 +1,19 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+
+//    uncomment this to upload proguard mapping file and debug symbols to Sentry
+//    and also set the token (sentry.properties) file
+//    id "io.sentry.android.gradle"
+}
+
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file('local.properties')
 if (localPropertiesFile.exists()) {
     localPropertiesFile.withReader('UTF-8') { reader ->
         localProperties.load(reader)
     }
-}
-
-def flutterRoot = localProperties.getProperty('flutter.sdk')
-if (flutterRoot == null) {
-    throw new GradleException("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
 }
 
 def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
@@ -21,15 +26,6 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
-apply plugin: 'com.android.application'
-apply plugin: 'kotlin-android'
-apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
-apply plugin: 'com.ydq.android.gradle.native-aar.import'
-
-// uncomment this to upload proguard mapping file and debug symbols to Sentry
-// and also set the token (sentry.properties) file
-// apply plugin: 'io.sentry.android.gradle'
-
 android {
     namespace = "io.sentry.samples.flutter"
     compileOptions {
@@ -41,7 +37,7 @@ android {
         languageVersion = "1.4"
     }
 
-    compileSdkVersion 34
+    compileSdkVersion 35
 
     sourceSets {
         main.java.srcDirs += 'src/main/kotlin'
@@ -50,7 +46,7 @@ android {
     defaultConfig {
         applicationId "io.sentry.samples.flutter"
         minSdkVersion flutter.minSdkVersion
-        targetSdkVersion 34
+        targetSdkVersion 35
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
 
@@ -67,6 +63,10 @@ android {
         ndk {
             // Flutter does not currently support building for x86 Android (See Issue 9253).
             abiFilters("armeabi-v7a", "x86_64", "arm64-v8a")
+        }
+
+        vectorDrawables {
+            useSupportLibrary = true
         }
     }
 
@@ -92,6 +92,10 @@ android {
         // https://github.com/flutter/flutter/issues/58247
         checkReleaseBuilds false
     }
+
+    packagingOptions {
+        exclude("**/values/values.xml")
+    }
 }
 
 flutter {
@@ -99,8 +103,20 @@ flutter {
 }
 
 dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlin_version"
-    implementation "androidx.annotation:annotation:1.1.0"
+    implementation "androidx.annotation:annotation:1.8.0"
+    implementation "com.google.android.material:material:1.7.0"
+}
+
+// Force transitive dependencies to compatible versions to avoid lStar merge errors
+configurations.all {
+    resolutionStrategy {
+        force 'com.google.android.material:material:1.7.0'
+        force 'androidx.annotation:annotation:1.8.0'
+        force 'androidx.core:core:1.13.1'
+        force 'androidx.appcompat:appcompat:1.6.1'
+        force 'androidx.vectordrawable:vectordrawable:1.1.0'
+        force 'androidx.transition:transition:1.4.1'
+    }
 }
 
 // uncomment this to upload debug symbols to Sentry

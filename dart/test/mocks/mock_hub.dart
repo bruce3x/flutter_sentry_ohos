@@ -1,7 +1,7 @@
+import 'dart:async';
+
 import 'package:meta/meta.dart';
 import 'package:sentry/sentry.dart';
-import 'package:sentry/src/metrics/metric.dart';
-import 'package:sentry/src/metrics/metrics_aggregator.dart';
 
 import '../test_utils.dart';
 import 'mock_sentry_client.dart';
@@ -12,27 +12,27 @@ class MockHub with NoSuchMethodProvider implements Hub {
   List<CaptureExceptionCall> captureExceptionCalls = [];
   List<CaptureMessageCall> captureMessageCalls = [];
   List<AddBreadcrumbCall> addBreadcrumbCalls = [];
+  List<CaptureLogCall> captureLogCalls = [];
   List<SentryClient?> bindClientCalls = [];
 
   // ignore: deprecated_member_use_from_same_package
-  List<SentryUserFeedback> userFeedbackCalls = [];
   List<CaptureTransactionCall> captureTransactionCalls = [];
-  List<CaptureMetricsCall> captureMetricsCalls = [];
   int closeCalls = 0;
   bool _isEnabled = true;
   int spanContextCals = 0;
   int getSpanCalls = 0;
 
   final _options = defaultTestOptions();
-  late final MetricsAggregator _metricsAggregator =
-      MetricsAggregator(options: _options, hub: this);
+
+  late Scope _scope;
 
   @override
   @internal
   SentryOptions get options => _options;
 
-  @override
-  MetricsAggregator? get metricsAggregator => _metricsAggregator;
+  MockHub() {
+    _scope = Scope(_options);
+  }
 
   /// Useful for tests.
   void reset() {
@@ -45,8 +45,8 @@ class MockHub with NoSuchMethodProvider implements Hub {
     _isEnabled = true;
     spanContextCals = 0;
     captureTransactionCalls = [];
-    captureMetricsCalls = [];
     getSpanCalls = 0;
+    _scope = Scope(_options);
   }
 
   @override
@@ -79,12 +79,14 @@ class MockHub with NoSuchMethodProvider implements Hub {
     dynamic throwable, {
     dynamic stackTrace,
     Hint? hint,
+    SentryMessage? message,
     ScopeCallback? withScope,
   }) async {
     captureExceptionCalls.add(CaptureExceptionCall(
       throwable,
       stackTrace,
       hint,
+      message,
     ));
     return SentryId.newId();
   }
@@ -109,6 +111,11 @@ class MockHub with NoSuchMethodProvider implements Hub {
   }
 
   @override
+  FutureOr<void> captureLog(SentryLog log) async {
+    captureLogCalls.add(CaptureLogCall(log, null));
+  }
+
+  @override
   Future<void> close() async {
     closeCalls = closeCalls + 1;
     _isEnabled = false;
@@ -121,23 +128,11 @@ class MockHub with NoSuchMethodProvider implements Hub {
   Future<SentryId> captureTransaction(
     SentryTransaction transaction, {
     SentryTraceContextHeader? traceContext,
+    Hint? hint,
   }) async {
     captureTransactionCalls
-        .add(CaptureTransactionCall(transaction, traceContext));
+        .add(CaptureTransactionCall(transaction, traceContext, hint));
     return transaction.eventId;
-  }
-
-  @override
-  Future<SentryId> captureMetrics(
-      Map<int, Iterable<Metric>> metricsBuckets) async {
-    captureMetricsCalls.add(CaptureMetricsCall(metricsBuckets));
-    return SentryId.newId();
-  }
-
-  @override
-  // ignore: deprecated_member_use_from_same_package
-  Future<void> captureUserFeedback(SentryUserFeedback userFeedback) async {
-    userFeedbackCalls.add(userFeedback);
   }
 
   @override
@@ -152,7 +147,7 @@ class MockHub with NoSuchMethodProvider implements Hub {
   }
 
   @override
-  Scope get scope => Scope(_options);
+  Scope get scope => _scope;
 }
 
 class CaptureEventCall {
@@ -167,11 +162,13 @@ class CaptureExceptionCall {
   final dynamic throwable;
   final dynamic stackTrace;
   final Hint? hint;
+  final SentryMessage? message;
 
   CaptureExceptionCall(
     this.throwable,
     this.stackTrace,
     this.hint,
+    this.message,
   );
 }
 

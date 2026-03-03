@@ -1,79 +1,119 @@
-// ignore_for_file: invalid_use_of_internal_member
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sentry/src/sentry_tracer.dart';
+import 'package:mockito/mockito.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
-import '../fake_frame_callback_handler.dart';
 import '../mocks.dart';
+import '../mocks.mocks.dart';
+
+const fakeDsn = 'https://abc@def.ingest.sentry.io/1234567';
 
 void main() {
-  PageRoute<dynamic> route(RouteSettings? settings) => PageRouteBuilder<void>(
-        pageBuilder: (_, __, ___) => Container(),
-        settings: settings,
-      );
-
   late Fixture fixture;
 
-  setUp(() {
+  setUp(() async {
     fixture = Fixture();
   });
 
-  testWidgets('SentryDisplayWidget reports manual ttid span after didPush',
+  testWidgets(
+      '$SentryDisplayWidget reports display with current route spanId when child calls reportFullDisplay',
       (WidgetTester tester) async {
-    final currentRoute = route(RouteSettings(name: 'Current Route'));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SentryDisplayWidget(
+          hub: fixture.mockHub,
+          child: TestStatefulWidget(),
+        ),
+      ),
+    );
 
-    await tester.runAsync(() async {
-      fixture.navigatorObserver.didPush(currentRoute, null);
+    // Wait for the frame to be rendered
+    await tester.pumpAndSettle();
 
-      await tester.pumpWidget(fixture.getSut());
+    verify(fixture.mockTimeToDisplayTracker.reportFullyDisplayed(
+      spanId: fixture.mockSentrySpanContext.spanId,
+    )).called(1);
+  });
 
-      await fixture.navigatorObserver.completedDisplayTracking?.future;
-    });
+  testWidgets(
+      '$SentryDisplayWidget reports calls ttfd immediately if child is a StatelessWidget',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SentryDisplayWidget(
+          hub: fixture.mockHub,
+          child: TestStatelessWidget(),
+        ),
+      ),
+    );
 
-    final tracer = fixture.hub.getSpan() as SentryTracer;
-    final spans = tracer.children.where((element) =>
-        element.context.operation ==
-        SentrySpanOperations.uiTimeToInitialDisplay);
+    // Wait for the frame to be rendered
+    await tester.pumpAndSettle();
 
-    expect(spans, hasLength(1));
-
-    final ttidSpan = spans.first;
-    expect(ttidSpan.context.operation,
-        SentrySpanOperations.uiTimeToInitialDisplay);
-    expect(ttidSpan.finished, isTrue);
-    expect(ttidSpan.context.description, 'Current Route initial display');
-    expect(ttidSpan.origin, SentryTraceOrigins.manualUiTimeToDisplay);
-    final ttidSpanDuration =
-        ttidSpan.endTimestamp!.difference(ttidSpan.startTimestamp);
-
-    expect(tracer.measurements, hasLength(1));
-    final measurement = tracer.measurements['time_to_initial_display'];
-    expect(measurement, isNotNull);
-    expect(measurement?.unit, DurationSentryMeasurementUnit.milliSecond);
-    expect(measurement?.value, ttidSpanDuration.inMilliseconds);
+    verify(fixture.mockTimeToDisplayTracker.reportFullyDisplayed(
+      spanId: fixture.mockSentrySpanContext.spanId,
+    )).called(1);
   });
 }
 
 class Fixture {
-  final Hub hub = Hub(defaultTestOptions()..tracesSampleRate = 1.0);
-  late final SentryNavigatorObserver navigatorObserver;
-  final fakeFrameCallbackHandler = FakeFrameCallbackHandler();
-  final frameCallbackHandler = FakeFrameCallbackHandler(
-      postFrameCallbackDelay: Duration(milliseconds: 10));
+  final options = defaultTestOptions()..tracesSampleRate = 1.0;
+
+  late SentrySpanContext mockSentrySpanContext;
+  late MockSentryTracer mockSentryTracer;
+  final MockHub mockHub = MockHub();
+  final MockTimeToDisplayTracker mockTimeToDisplayTracker =
+      MockTimeToDisplayTracker();
 
   Fixture() {
-    navigatorObserver = SentryNavigatorObserver(hub: hub);
+    mockSentrySpanContext = SentrySpanContext(operation: 'ui.load');
+    mockSentrySpanContext.spanId = SpanId.newId();
+
+    options.timeToDisplayTracker = mockTimeToDisplayTracker;
+
+    when(mockTimeToDisplayTracker.transactionId).thenReturn(
+      mockSentrySpanContext.spanId,
+    );
+
+    mockSentryTracer = MockSentryTracer();
+    when(mockSentryTracer.context).thenReturn(mockSentrySpanContext);
+
+    when(mockHub.options).thenReturn(options);
+
+    options.timeToDisplayTracker = mockTimeToDisplayTracker;
+  }
+}
+
+class TestStatelessWidget extends StatelessWidget {
+  const TestStatelessWidget({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Text('Test');
+  }
+}
+
+class TestStatefulWidget extends StatefulWidget {
+  const TestStatefulWidget({super.key});
+
+  @override
+  State<TestStatefulWidget> createState() => _TestStatefulWidgetState();
+}
+
+class _TestStatefulWidgetState extends State<TestStatefulWidget> {
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(Duration(microseconds: 1), () {
+      // Some long running task
+      if (mounted) {
+        SentryDisplayWidget.of(context).reportFullyDisplayed();
+      }
+    });
   }
 
-  MaterialApp getSut() {
-    return MaterialApp(
-      // ignore: deprecated_member_use_from_same_package
-      home: SentryDisplayWidget(
-        frameCallbackHandler: frameCallbackHandler,
-        child: Text('my text'),
-      ),
-    );
+  @override
+  Widget build(BuildContext context) {
+    return const Text('Test');
   }
 }

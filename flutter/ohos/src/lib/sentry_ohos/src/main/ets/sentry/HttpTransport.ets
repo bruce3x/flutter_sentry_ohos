@@ -21,15 +21,16 @@ import { SentryLevel } from './SentryLevel';
 import { Breadcrumb } from './Breadcrumb';
 import http from '@ohos.net.http';
 import { SentryOptions } from './SentryOptions';
-import { FileEnvelopeCache } from './Cache';
+import { FileEnvelopeCache, CachedRawEnvelope } from './Cache';
 import { ClientReport, ClientReportPayload } from './ClientReport';
 import { SentryThread } from './SentryThread';
 import { SdkVersion } from './SdkVersion';
 import fs from '@ohos.file.fs';
 import fileio from '@ohos.fileio';
+import util from '@ohos.util';
 import { UserFeedbackPayload } from './UserFeedback';
 import { getReplayId } from '../sentry_ohos_replay/api';
-import util from '@ohos.util';
+import { replayInfo } from '../sentry_ohos_replay/ReplayLogger';
 
 // Types for serialization outputs
 interface MessageOut { message: string }
@@ -70,7 +71,7 @@ export class HttpTransport implements ITransport {
   private cache: FileEnvelopeCache | null = null;
   private clientReport: ClientReport | null = null;
   private rateLimitUntilMs: number | null = null;
-  private isFlushing: boolean = false; // Prevent concurrent flush execution
+  private isFlushing: boolean = false; // Flush lock to prevent concurrent execution
 
   private endpoint: string;
 
@@ -249,7 +250,9 @@ export class HttpTransport implements ITransport {
         class ReplayCtx { replay_id?: string; id?: string; type?: string; constructor(id: string) { this.replay_id = id; this.id = id; this.type = 'replay'; } }
         ctx['replay'] = new ReplayCtx(ridNorm) as Object;
         (ev as SentryEvent).contexts = ctx;
-        try { if (this.options.debug) console.info('[replay][transport] inject rid=' + ridNorm + ' into event'); } catch (_) {}
+        if (this.options.debug) {
+          replayInfo('HttpTransport', 'transport inject rid=' + ridNorm + ' into event');
+        }
       }
     } catch (_) {}
     const envelope = this.buildEnvelope(event);
@@ -324,7 +327,9 @@ export class HttpTransport implements ITransport {
         class ReplayCtx { replay_id?: string; id?: string; type?: string; constructor(id: string) { this.replay_id = id; this.id = id; this.type = 'replay'; } }
         ctx['replay'] = new ReplayCtx(rid) as Object;
         ev.contexts = ctx;
-        try { if (this.options.debug) console.info('[replay][transport] inject rid=' + rid + ' into event(withAttachments)'); } catch (_) {}
+        if (this.options.debug) {
+          replayInfo('HttpTransport', 'transport inject rid=' + rid + ' into event(withAttachments)');
+        }
       }
     } catch (_) {}
 
@@ -422,10 +427,6 @@ export class HttpTransport implements ITransport {
   async sendRawEnvelope(envelopeBytes: Uint8Array): Promise<boolean> {
     try {
       if (this.isRateLimited()) {
-        // Cache the envelope for later retry when rate limited (Android pattern)
-        if (this.cache) {
-          this.cache.storeRawEnvelope(envelopeBytes);
-        }
         return false;
       }
       const url = this.endpoint;
@@ -472,6 +473,7 @@ export class HttpTransport implements ITransport {
           }
           return msg;
         })();
+        console.error(`[Sentry] HttpTransport sendRaw exception: ${em}`);
         // 尝试打印错误对象的 JSON（如果可能）
         try {
           if (typeof err === 'object' && err !== null) {
@@ -484,6 +486,7 @@ export class HttpTransport implements ITransport {
                 const val = errObj[key];
                 errDetails.push(`${key}=${String(val)}`);
               }
+              console.error(`[Sentry] HttpTransport sendRaw exception properties: ${errDetails.join(', ')}`);
             }
           }
         } catch (_) {
@@ -504,10 +507,6 @@ export class HttpTransport implements ITransport {
         return code ? `${msg} - ${code}` : msg;
       })();
       console.error(`[Sentry] HttpTransport FATAL ERROR in sendRawEnvelope: ${em}`);
-      // Cache the envelope for later retry on fatal error (Android pattern)
-      if (this.cache) {
-        this.cache.storeRawEnvelope(envelopeBytes);
-      }
       return false;
     }
   }
@@ -1169,11 +1168,11 @@ export class HttpTransport implements ITransport {
         return true;
       }
       const start = Date.now();
-
+      
       // 1) Flush JSON events (native SDK events)
       const events = this.cache.all();
       // Flushing cached events
-
+      
       let successCount = 0;
       let failCount = 0;
       for (let i = 0; i < events.length; i++) {
@@ -1199,10 +1198,10 @@ export class HttpTransport implements ITransport {
           console.error(`[Sentry] HttpTransport flush send failed for event ${ev.event_id}: ${em}`);
         }
       }
-
+      
       // 2) Flush raw envelopes (Dart/Flutter events)
       const rawEnvelopes = this.cache.allRawEnvelopes();
-
+      
       let rawSuccessCount = 0;
       let rawFailCount = 0;
       for (let i = 0; i < rawEnvelopes.length; i++) {
@@ -1229,7 +1228,7 @@ export class HttpTransport implements ITransport {
           console.error(`[Sentry] HttpTransport flush send failed for raw envelope ${env.id}: ${em}`);
         }
       }
-
+      
       // 3) 尝试发送 client_report
       try {
         await this.sendClientReport();
@@ -1258,7 +1257,7 @@ export class HttpTransport implements ITransport {
       this.isFlushing = false; // Always release the lock
     }
   }
-
+  
   /**
    * Send raw envelope without caching on failure (used during flush to avoid infinite loop).
    * Also injects 'sent_at' into envelope header if missing (required by Sentry server).
@@ -1268,10 +1267,10 @@ export class HttpTransport implements ITransport {
       if (this.isRateLimited()) {
         return false;
       }
-
+      
       // Inject sent_at into envelope header if missing
       const processedBytes = this.injectSentAtIntoEnvelope(envelopeBytes);
-
+      
       const url = this.endpoint;
       const result = await this.client.request(
         url,
@@ -1321,23 +1320,23 @@ export class HttpTransport implements ITransport {
           break;
         }
       }
-
+      
       if (headerEndIdx === -1) {
         console.warn('[Sentry] [HttpTransport] Could not find envelope header end, sending as-is');
         return envelopeBytes;
       }
-
+      
       // Extract and parse header
       const headerBytes = envelopeBytes.slice(0, headerEndIdx);
       const decoder = new util.TextDecoder('utf-8');
       const headerStr = decoder.decodeToString(headerBytes);
-
+      
       // Check if sent_at already exists
       if (headerStr.includes('"sent_at"')) {
         // Already has sent_at, no modification needed
         return envelopeBytes;
       }
-
+      
       // Parse header JSON and add sent_at
       let headerObj: Record<string, Object>;
       try {
@@ -1346,22 +1345,23 @@ export class HttpTransport implements ITransport {
         console.warn(`[Sentry] [HttpTransport] Failed to parse envelope header: ${e}`);
         return envelopeBytes;
       }
-
+      
       // Add sent_at at the beginning (Sentry convention)
       const sentAt = new Date().toISOString();
+      // ArkTS doesn't support object spread, manually copy properties
       headerObj['sent_at'] = sentAt;
       const newHeaderStr = JSON.stringify(headerObj);
-
+      
       // Rebuild envelope with new header
       const encoder = new util.TextEncoder();
       const newHeaderBytes = encoder.encodeInto(newHeaderStr);
       const restBytes = envelopeBytes.slice(headerEndIdx); // includes the newline and rest
-
+      
       // Combine new header with rest of envelope
       const newEnvelope = new Uint8Array(newHeaderBytes.length + restBytes.length);
       newEnvelope.set(newHeaderBytes, 0);
       newEnvelope.set(restBytes, newHeaderBytes.length);
-
+      
       return newEnvelope;
     } catch (err) {
       console.error(`[Sentry] [HttpTransport] Error injecting sent_at: ${err}`);

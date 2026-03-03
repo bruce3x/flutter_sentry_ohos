@@ -1,3 +1,5 @@
+import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:sentry_flutter/src/native/native_scope_observer.dart';
@@ -19,6 +21,7 @@ void testConfiguration({
   required Iterable<Integration> integrations,
   required Iterable<Type> shouldHaveIntegrations,
   required Iterable<Type> shouldNotHaveIntegrations,
+  SentryFlutterOptions? options,
 }) {
   final numberOfIntegrationsByType = <Type, int>{};
   for (var e in integrations) {
@@ -35,6 +38,22 @@ void testConfiguration({
   for (final type in shouldNotHaveIntegrations) {
     expect(integrations, isNot(contains(type)));
   }
+
+  Integration? nativeIntegration;
+  Integration? loadDebugImagesIntegration;
+  if (kIsWeb) {
+    nativeIntegration = integrations.firstWhereOrNull(
+        (x) => x.runtimeType.toString() == 'WebSdkIntegration');
+    loadDebugImagesIntegration = integrations.firstWhereOrNull(
+        (x) => x.runtimeType.toString() == 'LoadWebDebugImagesIntegration');
+  } else {
+    nativeIntegration = integrations.firstWhereOrNull(
+        (x) => x.runtimeType.toString() == 'NativeSdkIntegration');
+    loadDebugImagesIntegration = integrations.firstWhereOrNull(
+        (x) => x.runtimeType.toString() == 'LoadNativeDebugImagesIntegration');
+  }
+  expect(loadDebugImagesIntegration, isNotNull);
+  expect(nativeIntegration, isNotNull);
 }
 
 void testBefore({

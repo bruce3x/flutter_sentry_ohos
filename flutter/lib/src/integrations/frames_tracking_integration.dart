@@ -1,5 +1,7 @@
 // ignore_for_file: invalid_use_of_internal_member
 
+import 'dart:core';
+
 import '../../sentry_flutter.dart';
 import '../binding_wrapper.dart';
 import '../frames_tracking/sentry_delayed_frames_tracker.dart';
@@ -9,6 +11,7 @@ import '../native/sentry_native_binding.dart';
 class FramesTrackingIntegration implements Integration<SentryFlutterOptions> {
   FramesTrackingIntegration(this._native);
 
+  static const integrationName = 'FramesTracking';
   final SentryNativeBinding _native;
   SentryFlutterOptions? _options;
   PerformanceCollector? _collector;
@@ -19,40 +22,42 @@ class FramesTrackingIntegration implements Integration<SentryFlutterOptions> {
     _options = options;
 
     if (!options.enableFramesTracking) {
-      return options.logger(SentryLevel.debug,
+      return options.log(SentryLevel.debug,
           '$FramesTrackingIntegration disabled: enableFramesTracking option is false');
     }
 
     if (options.tracesSampleRate == null && options.tracesSampler == null) {
-      return options.logger(SentryLevel.debug,
+      return options.log(SentryLevel.debug,
           '$FramesTrackingIntegration disabled: tracesSampleRate and tracesSampler are disabled');
     }
 
     final widgetsBinding = options.bindingUtils.instance;
     if (widgetsBinding == null ||
         widgetsBinding is! SentryWidgetsBindingMixin) {
-      return options.logger(SentryLevel.warning,
-          '$FramesTrackingIntegration disabled: incompatible binding, SentryFlutterWidgetsBinding has not been instantiated. Please, use SentryFlutterWidgetsBinding.ensureInitialized() instead of FlutterWidgetsBinding.ensureInitialized()');
+      return options.log(SentryLevel.warning,
+          '$FramesTrackingIntegration disabled: incompatible binding, SentryWidgetsFlutterBinding has not been instantiated. Please, use SentryWidgetsFlutterBinding.ensureInitialized() instead of WidgetsFlutterBinding.ensureInitialized()');
     }
     _widgetsBinding = widgetsBinding;
 
     final expectedFrameDuration = await _initializeExpectedFrameDuration();
     if (expectedFrameDuration == null) {
-      return options.logger(SentryLevel.debug,
+      return options.log(SentryLevel.debug,
           '$FramesTrackingIntegration disabled: could not fetch valid display refresh rate');
     }
 
     // Everything valid, we can initialize now
     final framesTracker =
         SentryDelayedFramesTracker(options, expectedFrameDuration);
-    widgetsBinding.registerFramesTracking(
-        framesTracker.addFrame, options.clock);
-    final collector = SpanFrameMetricsCollector(options, framesTracker);
+    widgetsBinding.initializeFramesTracking(
+        framesTracker.addDelayedFrame, options, expectedFrameDuration);
+    final collector = SpanFrameMetricsCollector(options, framesTracker,
+        resumeFrameTracking: () => widgetsBinding.resumeTrackingFrames(),
+        pauseFrameTracking: () => widgetsBinding.pauseTrackingFrames());
     options.addPerformanceCollector(collector);
     _collector = collector;
 
-    options.sdk.addIntegration('framesTrackingIntegration');
-    options.logger(SentryLevel.debug,
+    options.sdk.addIntegration(integrationName);
+    options.log(SentryLevel.debug,
         '$FramesTrackingIntegration successfully initialized with an expected frame duration of ${expectedFrameDuration.inMilliseconds}ms');
   }
 

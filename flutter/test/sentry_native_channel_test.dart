@@ -1,27 +1,28 @@
 // ignore_for_file: inference_failure_on_function_invocation
 
 @TestOn('vm')
-library flutter_test;
+library;
 
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
+import 'package:sentry/src/platform/mock_platform.dart';
+import 'package:sentry/src/platform/platform.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:sentry_flutter/src/native/factory.dart';
 import 'package:sentry_flutter/src/native/method_channel_helper.dart';
 import 'package:sentry_flutter/src/native/sentry_native_binding.dart';
-import 'package:sentry/src/platform/platform.dart' as platform;
 import 'package:sentry_flutter/src/replay/replay_config.dart';
+
 import 'mocks.dart';
 import 'mocks.mocks.dart';
-import 'sentry_flutter_test.dart';
 
 void main() {
   for (var mockPlatform in [
     MockPlatform.android(),
-    MockPlatform.iOs(),
-    MockPlatform.macOs()
+    MockPlatform.iOS(),
+    MockPlatform.macOS()
   ]) {
     group('$SentryNativeBinding', () {
       late SentryNativeBinding sut;
@@ -29,9 +30,9 @@ void main() {
 
       setUp(() {
         channel = MockMethodChannel();
-        final options =
-            defaultTestOptions(getPlatformChecker(platform: mockPlatform))
-              ..methodChannel = channel;
+        final options = defaultTestOptions()
+          ..platform = mockPlatform
+          ..methodChannel = channel;
         sut = createBinding(options);
       });
 
@@ -68,39 +69,23 @@ void main() {
         expect(actual, isNull);
       });
 
-      test('beginNativeFrames', () async {
-        when(channel.invokeMethod('beginNativeFrames'))
-            .thenAnswer((realInvocation) async {});
-        await sut.beginNativeFrames();
-
-        verify(channel.invokeMethod('beginNativeFrames'));
-      });
-
-      test('endNativeFrames', () async {
-        final sentryId = SentryId.empty();
-
-        when(channel
-                .invokeMethod('endNativeFrames', {'id': sentryId.toString()}))
-            .thenAnswer((_) async => {
-                  'totalFrames': 3,
-                  'slowFrames': 2,
-                  'frozenFrames': 1,
-                });
-
-        final actual = await sut.endNativeFrames(sentryId);
-
-        expect(actual?.totalFrames, 3);
-        expect(actual?.slowFrames, 2);
-        expect(actual?.frozenFrames, 1);
-      });
-
       test('setUser', () async {
         final user = SentryUser(
           id: "fixture-id",
           data: {'object': Object()},
         );
-        final normalizedUser = user.copyWith(
+        final normalizedUser = SentryUser(
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          ipAddress: user.ipAddress,
           data: MethodChannelHelper.normalizeMap(user.data),
+          // ignore: deprecated_member_use
+          extras: user.extras,
+          geo: user.geo,
+          name: user.name,
+          // ignore: invalid_use_of_internal_member
+          unknown: user.unknown,
         );
         when(channel.invokeMethod('setUser', {'user': normalizedUser.toJson()}))
             .thenAnswer((_) => Future.value());
@@ -115,9 +100,16 @@ void main() {
         final breadcrumb = Breadcrumb(
           data: {'object': Object()},
         );
-        final normalizedBreadcrumb = breadcrumb.copyWith(
-            data: MethodChannelHelper.normalizeMap(breadcrumb.data));
-
+        final normalizedBreadcrumb = Breadcrumb(
+          message: breadcrumb.message,
+          category: breadcrumb.category,
+          data: MethodChannelHelper.normalizeMap(breadcrumb.data),
+          level: breadcrumb.level,
+          type: breadcrumb.type,
+          timestamp: breadcrumb.timestamp,
+          // ignore: invalid_use_of_internal_member
+          unknown: breadcrumb.unknown,
+        );
         when(channel.invokeMethod(
                 'addBreadcrumb', {'breadcrumb': normalizedBreadcrumb.toJson()}))
             .thenAnswer((_) => Future.value());
@@ -207,7 +199,7 @@ void main() {
         if (mockPlatform.isAndroid) {
           matcher = throwsUnsupportedError;
         } else if (mockPlatform.isIOS || mockPlatform.isMacOS) {
-          if (platform.instance.isMacOS) {
+          if (Platform().isMacOS) {
             matcher = throwsA(predicate((e) =>
                 e is Exception &&
                 e.toString().contains('Failed to load Objective-C class')));
@@ -331,16 +323,21 @@ void main() {
         when(channel.invokeMethod('setReplayConfig', any))
             .thenAnswer((_) => Future.value());
 
-        final config =
-            ReplayConfig(width: 1.1, height: 2.2, frameRate: 3, bitRate: 4);
+        final config = ReplayConfig(
+            windowWidth: 110,
+            windowHeight: 220,
+            width: 1.1,
+            height: 2.2,
+            frameRate: 3);
         await sut.setReplayConfig(config);
 
         if (mockPlatform.isAndroid) {
           verify(channel.invokeMethod('setReplayConfig', {
+            'windowWidth': config.windowWidth,
+            'windowHeight': config.windowHeight,
             'width': config.width,
             'height': config.height,
             'frameRate': config.frameRate,
-            'bitRate': config.bitRate,
           }));
         } else {
           verifyNever(channel.invokeMethod('setReplayConfig', any));
@@ -353,10 +350,28 @@ void main() {
         when(channel.invokeMethod('captureReplay', any))
             .thenAnswer((_) => Future.value(sentryId.toString()));
 
-        final returnedId = await sut.captureReplay(true);
+        final returnedId = await sut.captureReplay();
 
-        verify(channel.invokeMethod('captureReplay', {'isCrash': true}));
+        verify(channel.invokeMethod('captureReplay'));
         expect(returnedId, sentryId);
+      });
+
+      test('getSession is no-op', () async {
+        await sut.getSession();
+
+        verifyZeroInteractions(channel);
+      });
+
+      test('updateSession is no-op', () async {
+        await sut.updateSession(status: 'test', errors: 1);
+
+        verifyZeroInteractions(channel);
+      });
+
+      test('captureSession is no-op', () async {
+        await sut.captureSession();
+
+        verifyZeroInteractions(channel);
       });
     });
   }

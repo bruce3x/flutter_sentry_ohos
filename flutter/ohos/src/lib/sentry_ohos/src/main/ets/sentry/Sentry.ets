@@ -43,7 +43,8 @@ export class Sentry {
     // ensure cache/clientReport passed if desired
     let cache: FileEnvelopeCache | null = null;
     if (options.cacheDirPath) {
-      cache = new FileEnvelopeCache(options.cacheDirPath, options.maxCacheItems ?? 30);
+      // Pass maxCacheItems from options (default 30, aligned with Android SDK)
+      cache = new FileEnvelopeCache(options.cacheDirPath, options.maxCacheItems);
     }
 
     if (!options.transportFactory) {
@@ -64,12 +65,20 @@ export class Sentry {
     Sentry._rootScopes = hub;
     Sentry._hub = hub;
 
+    // Sentry._hub.scope?.addBreadcrumb(
+    //   { message: 'User clicked',
+    //     category: 'ui',
+    //     level: 'info',
+    //     timestamp: new Date().toISOString()
+    //   })
+
     Sentry._initialized = true;
     if (options.debug) {
       console.info('[Sentry] SDK initialized successfully');
     }
 
-    // Run cleanup and flush asynchronously to avoid blocking init
+    // Clean up old sent envelopes (>3 days) on SDK startup
+    // and auto-flush cached events, run asynchronously to avoid blocking init
     if (cache) {
       // Use setTimeout to defer heavy IO operations
       const cacheRef = cache;
@@ -78,7 +87,6 @@ export class Sentry {
       setTimeout(() => {
         // Clean up old sent envelopes (>3 days) on SDK startup
         try {
-          const cleanupStart = Date.now();
           const cleanedCount = cacheRef.cleanupOldSentEnvelopes();
           // Cleanup completed
         } catch (e) {
@@ -101,6 +109,14 @@ export class Sentry {
     return Sentry._hub;
   }
 
+  public static isInitialized(): boolean {
+    return Sentry._hub !== null;
+  }
+
+  public static getHubIfAvailable(): Hub | null {
+    return Sentry._hub;
+  }
+
   // Align with Android's Sentry.getCurrentScopes(): return current Hub/Scopes facade
   public static getCurrentScopes(): Hub {
     if (Sentry._globalHubMode) {
@@ -117,14 +133,7 @@ export class Sentry {
     return scopes as Hub;
   }
 
-  public static isInitialized(): boolean {
-    return Sentry._hub !== null;
-  }
-
-  public static getHubIfAvailable(): Hub | null {
-    return Sentry._hub;
-  }
-
+  // Session controls
   public static startSession(): void {
     Sentry.getHub().startSession();
   }
@@ -212,3 +221,4 @@ export class Sentry {
   }
 
 }
+

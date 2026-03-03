@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ -n ${CI:+x} ]]; then
     echo "Running in CI so we need to set up Flutter SDK first"
-    curl -Lv https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_3.13.3-stable.zip --output /tmp/flutter.zip
+    curl -Lv https://storage.googleapis.com/flutter_infra_release/releases/stable/macos/flutter_macos_3.27.3-stable.zip --output /tmp/flutter.zip
     unzip -q /tmp/flutter.zip -d /tmp
     export PATH=":/tmp/flutter/bin:$PATH"
     which flutter
@@ -25,7 +25,6 @@ mv "$temp/$subdir" $temp/Sentry.framework
 
 binding="lib/src/native/cocoa/binding.dart"
 dart run ffigen --config ffi-cocoa.yaml
-sed -i.bak 's|final class|class|g' $binding
 sed -i.bak 's|static int startProfilerForTrace_(SentryCocoa _lib, SentryId? traceId)|static int startProfilerForTrace_(SentryCocoa _lib, SentryId1? traceId)|g' $binding
 rm $binding.bak
 dart format $binding

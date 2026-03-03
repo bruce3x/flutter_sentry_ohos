@@ -10,7 +10,7 @@
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
- * limitations under the License.
+ * limitations under the License. 
  */
 
 import { ReplayPayload } from './types';
@@ -27,7 +27,6 @@ export class ReplayTransport {
    * @returns Promise<boolean> 成功返回 true，否则 false
    */
   public async sendReplay(url: string, payload: ReplayPayload): Promise<boolean> {
-    console.info('[SentryTrace] ReplayTransport: sendReplay called');
     const sender = new ReplayEnvelopeSender();
     const ok = await sender.send(url, payload);
     return ok;

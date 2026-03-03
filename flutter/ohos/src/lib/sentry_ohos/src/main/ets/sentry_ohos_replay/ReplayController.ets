@@ -28,23 +28,21 @@ import { ReplayPayload, ReplayPayloadEvent, ShapeFramePayload } from './types';
 import { ShapeFrameBuilder, ComponentLayoutInfo } from './ShapeFrameBuilder';
 import common from '@ohos.app.ability.common';
 import fs from '@ohos.file.fs';
-import media from '@ohos.multimedia.media';
 import fileio from '@ohos.fileio';
 import window from '@ohos.window';
 import { ShapeFrameRenderer } from './ShapeFrameRenderer';
 import { ArkTsVideoEncoder } from './ArkTsVideoEncoder';
-import { ShapeVideoEncoder } from './ShapeVideoEncoder';
 import { SentryOhos } from '../core/SentryOhos';
 import image from '@ohos.multimedia.image';
 import { Sentry } from '../sentry/Sentry';
-import { BreadcrumbStore, Breadcrumb } from '../sentry/Breadcrumb';
+import { Breadcrumb } from '../sentry/Breadcrumb';
 import { DefaultReplayBreadcrumbConverter } from './DefaultReplayBreadcrumbConverter';
 import type { RRWebBreadcrumbEvent } from './rrweb/RRWebBreadcrumbEvent';
 import type { RRWebSpanEvent } from './rrweb/RRWebSpanEvent';
 import { DefaultReplaySpanConverter } from './DefaultReplaySpanConverter';
 import { TraceManager } from '../core/TraceManager';
 import { SurfaceTextureRegistryEntry } from '@ohos/flutter_ohos';
-import { replayInfo, replayWarn, replayDebug } from './ReplayLogger';
+import { replayWarn, replayDebug } from './ReplayLogger';
 
 interface AppStorageCompat {
   get?: (key: string) => Object | undefined;
@@ -101,11 +99,7 @@ class PixelBufferSelectionImpl {
     this.stride = stride;
   }
 }
-
-interface SamplePoint {
-  x: number;
-  y: number;
-}
+// 触摸轨迹采样 SamplePoint {x: number,  y: number}
 
 interface AbilityInfoCompat {
   type?: string | number;
@@ -140,11 +134,13 @@ export interface ReplayControllerOptions {
   uiComponents: UIComponent[];
   textInputs: TextInputComponent[];
   autoStart?: boolean;
-  bufferMode?: boolean; // 缓冲模式（错误触发发送）
+  // 缓冲模式（错误触发发送）
+  bufferMode?: boolean;
   serverUrl?: string;
   sessionSampleRate?: number;
   onErrorSampleRate?: number;
-  enableScreenFrames?: boolean; // 默认关闭像素级屏幕帧，避免敏感信息泄露
+  // 默认关闭像素级屏幕帧，避免敏感信息泄露
+  enableScreenFrames?: boolean;
 }
 
 export class ReplayController {
@@ -159,7 +155,8 @@ export class ReplayController {
   private enableScreenFrames: boolean;
   private shapeBuilder: ShapeFrameBuilder;
   private latestLayouts: ComponentLayoutInfo[] = [];
-  private recordingOutputPath?: string; // 形状视频输出（目录或MP4）
+  // 形状视频输出（目录或MP4）
+  private recordingOutputPath?: string;
   private recordingOutputSize?: number;
   private renderer: ShapeFrameRenderer;
   private encoder?: ArkTsVideoEncoder;
@@ -178,20 +175,33 @@ export class ReplayController {
   private isPaused: boolean = false;
   private isConnected: boolean = true;
   private isRateLimited: boolean = false;
-  private isScrolling: boolean = false; // 滑动状态标志
+  private videoSegmentStartMs: number = 0;
+  private videoSegmentMaxMs: number = 30000;
+  private isRotatingSegment: boolean = false;
+  // 滑动状态标志
+  private isScrolling: boolean = false;
   private scrollingSuppressedUntil: number = 0;
-  private readonly scrollingCooldownMs: number = 800; // 滑动期间跳过截图，避免主线程阻塞
-  private readonly scrollingResumeDelayMs: number = 450; // 滑动结束后延迟恢复，等待物理惯性结束
-  private firstFrameDelayMs: number = 500; // 第一帧延迟时间，减少到500ms以尽快开始捕获
-  private firstFrameCaptured: boolean = false; // 是否已捕获第一帧
-  private captureWarmupMs: number = 1000; // 启动后前1秒使用降频策略
-  private warmupCaptureIntervalMs: number = 200; // 暖机期间的最小截图间隔，调整为200ms（5FPS）
+  // 滑动期间跳过截图，避免主线程阻塞
+  private readonly scrollingCooldownMs: number = 6000;
+  // 滑动结束后延迟恢复，等待物理惯性结束（加长以避免 window.snapshot 阻塞触发 ANR）
+  private readonly scrollingResumeDelayMs: number = 3000;
+  // 第一帧延迟时间，减少到500ms以尽快开始捕获
+  private firstFrameDelayMs: number = 500;
+  // 是否已捕获第一帧
+  private firstFrameCaptured: boolean = false;
+  // 启动后前1秒使用降频策略
+  private captureWarmupMs: number = 1000;
+  // 暖机期间的最小截图间隔，调整为200ms（5FPS
+  private warmupCaptureIntervalMs: number = 200;
   private lastWarmupCaptureTs: number = 0;
-  private heavyCaptureThresholdMs: number = 120; // 超过该耗时判定为重载
-  private heavyCaptureCooldownMs: number = 4000; // 重载后暂停截图的时间
+  // 超过该耗时判定为重载
+  private heavyCaptureThresholdMs: number = 120;
+  // 重载后暂停截图的时间
+  private heavyCaptureCooldownMs: number = 8000;
   private adaptiveCaptureResumeTs: number = 0;
   private lastAdaptiveLogTs: number = 0;
-  private previousReplayFinalized: boolean = false; // 防止finalizePreviousReplay重复调用
+  // 防止finalizePreviousReplay重复调用
+  private previousReplayFinalized: boolean = false;
 
   constructor(options: ReplayControllerOptions) {
     // 初始化捕获器
@@ -241,7 +251,7 @@ export class ReplayController {
     this.gestureCapture.startCapture();
     this.inputCapture.startCapture();
     this.sessionManager.startSession();
-    replayInfo('ReplayController', '已开始捕获用户操作');
+    console.log('ReplayController: 已开始捕获用户操作');
     this.lastWarmupCaptureTs = 0;
     this.adaptiveCaptureResumeTs = 0;
     // 将当前 replay_id 写入全局 tag，便于官方 SDK 上报的错误自动携带并在 Web 侧关联
@@ -251,7 +261,6 @@ export class ReplayController {
     } catch (_) {}
 
     // 启动原生截图编码（新方案：使用 componentSnapshot 组件截图 API，避免 window.snapshot() 阻塞）
-    // 参考：https://zhuanlan.zhihu.com/p/25261681579
     // componentSnapshot 比 window.snapshot() 更高效，且不会阻塞主线程
     if (this.enableScreenFrames && this.context) {
       if (!this.encoder) {
@@ -262,8 +271,7 @@ export class ReplayController {
         this.flutterFrameWidth = 0;
         this.flutterFrameHeight = 0;
       }
-      // 注意：不在这里初始化编码器，而是在第一次捕获到帧时，使用实际帧的分辨率初始化
-      // 这样可以避免分辨率不匹配导致的重新初始化问题
+      this.videoSegmentStartMs = Date.now();
       const fps = this.sampling.frameRate;
       const interval = Math.max(1, Math.floor(1000 / fps));
       type IntervalFn = () => Promise<void>;
@@ -291,16 +299,6 @@ export class ReplayController {
             return;
           }
           const nowTs = Date.now();
-          /*
-          if (this.isScrolling) {
-            if (nowTs - this.lastAdaptiveLogTs > 1000) {
-              this.lastAdaptiveLogTs = nowTs;
-              replayDebug('ReplayController', 'scroll skip: gesture in progress, suppressing capture');
-            }
-            this.scrollingSuppressedUntil = nowTs + this.scrollingCooldownMs;
-            return;
-          }
-          */
           if (this.scrollingSuppressedUntil > nowTs) {
             if (nowTs - this.lastAdaptiveLogTs > 1000) {
               this.lastAdaptiveLogTs = nowTs;
@@ -325,9 +323,24 @@ export class ReplayController {
           } else if (this.lastWarmupCaptureTs !== 0) {
             this.lastWarmupCaptureTs = 0;
           }
-          // 滑动时不跳过截图，但可以降低帧率（通过间隔控制）
-          // 这样滑动过程也能被记录
+          if (!this.isRotatingSegment &&
+              this.videoSegmentStartMs > 0 &&
+              (nowTs - this.videoSegmentStartMs) >=
+                this.videoSegmentMaxMs) {
+            this.isRotatingSegment = true;
+            this.rotateVideoSegment().then(() => {
+              this.isRotatingSegment = false;
+            }).catch(() => {
+              this.isRotatingSegment = false;
+            });
+            return;
+          }
           try {
+            // 如果上一次 snapshot 还在飞行中（原生阻塞），跳过本帧
+            if (this.encoder.isSnapshotInFlight()) {
+              replayDebug('ReplayController', 'snapshot in flight, skip frame');
+              return;
+            }
             const captureStart = Date.now();
             // 如果编码器尚未初始化，先使用默认分辨率初始化（后续会根据实际帧分辨率调整）
             // 这样可以确保 captureSnapshot() 时编码器已经有上下文（baseContext 和 ctx）
@@ -354,8 +367,13 @@ export class ReplayController {
               // 使用 appendFrame 直接传递 PixelMap，避免在 ArkTS 层进行 readPixelsToBuffer (同步/阻塞)
               // 让 encoder 内部决定最佳处理方式 (Native Surface / EncodePixelMap / Fallback)
               try {
+                // 检查 encoder 是否仍然有效（可能在 finalize 后被置为 undefined）
+                if (!this.encoder) {
+                  replayDebug('ReplayController', 'appendFrame skipped: encoder already finalized');
+                  return;
+                }
                 await this.encoder.appendFrame(pm, timestamp);
-                
+
                 if (!this.firstFrameCaptured) {
                   this.firstFrameCaptured = true;
                   const elapsed = Date.now() - this.recordingStartMs;
@@ -391,7 +409,7 @@ export class ReplayController {
     this.gestureCapture.stopCapture();
     this.inputCapture.stopCapture();
     this.sessionManager.endSession();
-    replayInfo('ReplayController', '已停止捕获用户操作');
+    console.log('ReplayController: 已停止捕获用户操作');
     if (this.frameTimer !== undefined) {
       clearInterval(this.frameTimer);
       this.frameTimer = undefined;
@@ -411,6 +429,48 @@ export class ReplayController {
         }
       }
     } catch (_) {}
+  }
+
+  private async rotateVideoSegment(): Promise<void> {
+    if (!this.encoder || !this.context) {
+      return;
+    }
+    try {
+      replayDebug('ReplayController',
+        'rotateVideoSegment: finalizing current '
+        + 'segment');
+      const out = await this.encoder.finalize(
+        this.context);
+      if (out) {
+        this.recordingOutputPath = out;
+        this.recordingOutputSize = this.safeStatSize(out);
+        replayDebug('ReplayController',
+          'rotateVideoSegment: finalized '
+          + String(this.recordingOutputSize)
+          + ' bytes -> ' + String(out));
+      }
+    } catch (err) {
+      replayWarn('ReplayController',
+        'rotateVideoSegment finalize error: '
+        + String(err));
+    }
+    try {
+      if (this.context && this.encoder) {
+        const w = this.encoder.getInitializedWidth();
+        const h = this.encoder.getInitializedHeight();
+        const fps = this.sampling.frameRate;
+        this.encoder.setStartTime(Date.now());
+        this.encoder.init(this.context, w, h, fps);
+        this.videoSegmentStartMs = Date.now();
+        replayDebug('ReplayController',
+          'rotateVideoSegment: started new segment '
+          + String(w) + 'x' + String(h));
+      }
+    } catch (err) {
+      replayWarn('ReplayController',
+        'rotateVideoSegment re-init error: '
+        + String(err));
+    }
   }
 
   /** 暂停（进入后台或离线/限流） */
@@ -478,9 +538,23 @@ export class ReplayController {
   /** App 后台：会话模式可尝试刷新一段 */
   public async onAppBackground(): Promise<void> {
     this.pause();
-    if (!this.bufferMode && this.serverUrl && this.context) {
+    if (this.enableScreenFrames && this.encoder &&
+        this.context) {
       try {
-        await this.uploadReplay(this.serverUrl, this.context);
+        const out = await this.encoder.finalize(
+          this.context);
+        if (out) {
+          this.recordingOutputPath = out;
+          this.recordingOutputSize =
+            this.safeStatSize(out);
+        }
+      } catch (_) {}
+    }
+    if (!this.bufferMode && this.serverUrl &&
+        this.context) {
+      try {
+        await this.uploadReplay(
+          this.serverUrl, this.context);
       } catch (_) {}
     }
   }
@@ -570,7 +644,6 @@ export class ReplayController {
 
   /** 上传 Replay 到服务端 */
   public async uploadReplay(serverUrl: string, context: common.BaseContext): Promise<boolean> {
-    replayInfo('ReplayController', 'uploadReplay called');
     this.serverUrl = serverUrl || this.serverUrl;
     this.context = context || this.context;
     const session = this.sessionManager.getSession();
@@ -784,8 +857,17 @@ export class ReplayController {
     } catch (_) {}
     const spanEvents: ReplayPayloadEvent = { type: 'span', data: rrwebSpans as Array<Object> } as ReplayPayloadEvent;
     const nowSec = Math.floor(Date.now() / 1000);
-    const videoWidthHint: number | undefined = this.flutterFrameWidth > 0 ? this.flutterFrameWidth : undefined;
-    const videoHeightHint: number | undefined = this.flutterFrameHeight > 0 ? this.flutterFrameHeight : undefined;
+    // 优先从编码器获取实际视频尺寸，而不是依赖 flutterFrameWidth/Height（组件截图模式下可能为 0）
+    let videoWidthHint: number | undefined = this.flutterFrameWidth > 0 ? this.flutterFrameWidth : undefined;
+    let videoHeightHint: number | undefined = this.flutterFrameHeight > 0 ? this.flutterFrameHeight : undefined;
+    if (this.encoder) {
+      try {
+        const encoderWidth = this.encoder.getInitializedWidth();
+        const encoderHeight = this.encoder.getInitializedHeight();
+        if (encoderWidth > 0) videoWidthHint = encoderWidth;
+        if (encoderHeight > 0) videoHeightHint = encoderHeight;
+      } catch (_) {}
+    }
     const frameRateHint: number | undefined = this.sampling.frameRate > 0 ? this.sampling.frameRate : undefined;
 
     // 如果启用了视频（像素帧），payload.started_at 必须与视频文件的实际开始时间（recordingStartMs）一致
@@ -947,7 +1029,8 @@ export class ReplayController {
     // 提高最小分辨率以避免编码器配置失败（错误码3：invalid argument）
     // 对齐分辨率时保持原始宽高比，避免图像变形
     const ALIGNMENT = 16;
-    const MIN_SIZE = 256; // 最小尺寸（宽度或高度中的较大值）
+    // 最小尺寸（宽度或高度中的较大值
+    const MIN_SIZE = 256;
 
     // 计算原始宽高比
     const aspectRatio = originalWidth > 0 && originalHeight > 0 ? originalWidth / originalHeight : 1.0;
@@ -1037,13 +1120,20 @@ export class ReplayController {
     this.context = ctx;
     this.cache.setContext(ctx);
     this.persistUiContext(ctx);
-    // 检测是否为 UIAbility 上下文：若无法取得窗口，不应立即禁用像素帧（可能因生命周期过早），交由 Encoder 延迟重试
+
+    // 在context设置完成后，尝试补发上次未发送的缓存
+    // 只执行一次，防止多次调用updateContext时重复发送
+    if (!this.previousReplayFinalized) {
+      this.previousReplayFinalized = true;
+      this.finalizePreviousReplay().then(() => {}).catch(() => {});
+    }
+    // 检测是否为 UIAbility 上下文：若无法取得窗口，则自动禁用像素帧，仅上报 rrweb
     if (this.enableScreenFrames) {
       (async () => {
         try {
           await window.getLastWindow(ctx);
-        } catch (e) {
-          replayWarn('ReplayController', 'updateContext: getLastWindow failed (transient?), keeping screen frames enabled. err=' + String(e));
+        } catch (_) {
+          this.enableScreenFrames = false;
         }
       })();
     }
@@ -1167,15 +1257,21 @@ export class ReplayController {
   private async finalizePreviousReplay(): Promise<void> {
     try {
       const previous = this.cache.load();
-      if (!previous || !this.serverUrl) {
+      if (!previous) {
         return;
       }
+
+      if (!this.serverUrl) {
+        return;
+      }
+
+      // 尝试发送缓存的replay
       const ok = await this.eventTransport.sendReplay(this.serverUrl, previous);
+
       if (ok) {
         this.cache.clear();
       }
     } catch (_) {
-      // ignore
     }
   }
 
@@ -1188,8 +1284,6 @@ export class ReplayController {
       return {};
     }
     // 如果 enableScreenFrames 为 false，但编码器存在，仍然尝试 finalize（可能是在 captureReplayOnError 中调用）
-    if (!this.enableScreenFrames) {
-    }
     if (!(this.context ?? context)) {
       replayDebug('ReplayController', 'ensureVideoReady: context not available');
       return {};
@@ -1197,7 +1291,6 @@ export class ReplayController {
     const effectiveContext = this.context ?? context;
     const start = Date.now();
     const checkInterval = 150; // Check every 150ms
-
 
     // First, wait for any pending frames to be processed (with timeout)
     const frameProcessingTimeout = Math.min(timeoutMs, 2000); // Max 2s for frame processing
@@ -1219,9 +1312,6 @@ export class ReplayController {
       await this.delay(checkInterval);
     }
 
-    if (!hasOutput) {
-    }
-
     // Wait a bit more to ensure all queued frames are processed
     await this.delay(500); // Increased from 300ms to 500ms to give more time for frame processing
 
@@ -1236,13 +1326,17 @@ export class ReplayController {
         if (typeof finalizedSize !== 'number' || finalizedSize <= 0) {
           finalizedSize = this.safeStatSize(finalizedPath);
         }
-      } else {
       }
     } catch (err) {
       replayWarn('ReplayController', 'ensureVideoReady: finalize error: ' + String(err));
     }
     // 只有在 finalize 成功后才清理编码器引用
     if (finalizedPath && typeof finalizedSize === 'number' && finalizedSize > 0) {
+    // 停止帧捕获定时器，避免 finalize 后继续尝试 appendFrame
+    if (this.frameTimer !== undefined) {
+      clearInterval(this.frameTimer);
+      this.frameTimer = undefined;
+    }
     this.encoder = undefined;
     this.flutterEncoderInitialized = false;
     this.flutterFrameWidth = 0;

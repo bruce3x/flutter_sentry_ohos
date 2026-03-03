@@ -58,43 +58,43 @@ class SentryNativeOhos extends SentryNativeChannel {
   @override
   Future<void> init(Hub hub) async {
     await super.init(hub);
-    if (options.experimental.replay.isEnabled) {
+    if (options.replay.isEnabled) {
       channel.setMethodCallHandler((call) async {
         switch (call.method) {
           case 'ReplayRecorder.start':
-            final replayId =
-            SentryId.fromId(call.arguments['replayId'] as String);
-
-            final config = ScheduledScreenshotRecorderConfig(
-                width: (call.arguments['width'] as num).toDouble(),
-                height: (call.arguments['height'] as num).toDouble(),
-                frameRate: call.arguments['frameRate'] as int);
-
-            _replayRecorder = OhosReplayRecorder(
-                config, options, channel, call.arguments['directory'] as String)
-              ..start();
-
+            final replayId = SentryId.fromId(call.arguments['replayId'] as String);
+            _replayRecorder = OhosReplayRecorder.factory(options);
+            await _replayRecorder!.start();
             hub.configureScope((s) {
               // ignore: invalid_use_of_internal_member
               s.replayId = replayId;
             });
+            break;
+          case 'ReplayRecorder.onConfigurationChanged':
+            final config = ScheduledScreenshotRecorderConfig(
+              width: (call.arguments['width'] as num).toDouble(),
+              height: (call.arguments['height'] as num).toDouble(),
+              frameRate: call.arguments['frameRate'] as int,
+            );
+            await _replayRecorder?.onConfigurationChanged(config);
             break;
           case 'ReplayRecorder.stop':
             hub.configureScope((s) {
               // ignore: invalid_use_of_internal_member
               s.replayId = null;
             });
-
             final future = _replayRecorder?.stop();
             _replayRecorder = null;
             await future;
-
             break;
           case 'ReplayRecorder.pause':
             await _replayRecorder?.pause();
             break;
           case 'ReplayRecorder.resume':
             await _replayRecorder?.resume();
+            break;
+          case 'ReplayRecorder.reset':
+            // ignored
             break;
           default:
             throw UnimplementedError('Method ${call.method} not implemented');

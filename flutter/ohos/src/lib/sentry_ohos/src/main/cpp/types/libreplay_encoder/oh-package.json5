@@ -1,0 +1,6 @@
+{
+  "name": "libreplay_encoder.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "Replay Encoder Native Module"
+}

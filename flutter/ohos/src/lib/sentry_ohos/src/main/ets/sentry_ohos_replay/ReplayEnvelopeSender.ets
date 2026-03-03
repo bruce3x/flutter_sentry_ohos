@@ -136,7 +136,7 @@ class GesturePayloadTimestampExtractor {
 interface ReplayRecording { segment_id: number; payload: Array<RRWebEventJson> }
 interface ReplayEventEnvelope {
   type: 'replay_event'; event_id: string; replay_id?: string; segment_id?: number;
-  timestamp?: number | string; replay_start_timestamp?: number | string; urls?: Array<string>;
+  timestamp?: number; replay_start_timestamp?: number; urls?: Array<string>;
   replay_type?: string; platform?: string; error_ids?: Array<string>; trace_ids?: Array<string>;
   release?: string; environment?: string;
   started_at?: string; finished_at?: string;
@@ -165,19 +165,12 @@ export class ReplayEnvelopeSender {
     return await new Promise<void>((resolve) => { setTimeout(() => resolve(), ms); });
   }
   async send(serverUrl: string, payload: ReplayPayload): Promise<boolean> {
-    console.info('[SentryTrace] ReplayEnvelopeSender: send called');
     const url = this.buildEndpointFromDsn(serverUrl);
-    console.info('[SentryTrace] ReplayEnvelopeSender: target URL: ' + url);
     
-    // Enable sendBinary for Mobile Replay (msgpack format)
     const ok = await this.sendBinary(url, payload);
     if (ok) {
-      console.info('[SentryTrace] ReplayEnvelopeSender: sendBinary returned true');
       return true;
     }
-    console.warn('[SentryTrace] ReplayEnvelopeSender: sendBinary returned false, falling back to standard envelope');
-    
-    console.info('[SentryTrace] ReplayEnvelopeSender: sending standard envelope');
     const envelope = this.buildStandardEnvelope(payload);
     const client = http.createHttp();
     const headers: Record<string, string> = {
@@ -188,31 +181,27 @@ export class ReplayEnvelopeSender {
       method: http.RequestMethod.POST,
       header: headers,
       extraData: envelope.buffer,
-      connectTimeout: 15000,
-      readTimeout: 60000, // Increased timeout for large video files
+      connectTimeout: 10000,
+      readTimeout: 30000, // Increased timeout for large video files
     };
     try {
       const res: http.HttpResponse = await client.request(url, options);
       client.destroy();
       const success = (res.responseCode as number) >= 200 && (res.responseCode as number) < 300;
-      console.info(`[SentryTrace] ReplayEnvelopeSender: standard send result=${success}, code=${res.responseCode}`);
       return success;
     } catch (err) {
-      console.error(`[SentryTrace] ReplayEnvelopeSender: standard send failed: ${err}`);
       try { client.destroy(); } catch (_) {}
       return false;
     }
   }
 
   async sendBinary(serverUrl: string, payload: ReplayPayload): Promise<boolean> {
-    console.info('[SentryTrace] ReplayEnvelopeSender: sendBinary called');
     try {
       // 分段节流：若上次发送后冷却期未过，则等待
       try {
         const now = Date.now();
         if (ReplayEnvelopeSender.nextSendAfterMs > now) {
         const delay = ReplayEnvelopeSender.nextSendAfterMs - now;
-        console.info(`[SentryTrace] ReplayEnvelopeSender: throttling, waiting ${delay}ms`);
         await this.sleep(delay);
         }
       } catch (_) {}
@@ -221,7 +210,7 @@ export class ReplayEnvelopeSender {
       const pushLine = (text: string): void => { parts.push(this.encodeUtf8(text + '\n')); };
       const pushBytes = (bytes: Uint8Array): void => { parts.push(bytes); parts.push(this.encodeUtf8('\n')); };
 
-      const sdk: SdkInfo = { name: 'sentry.dart.flutter', version: '8.12.0' };
+      const sdk: SdkInfo = { name: 'sentry.javascript.harmony', version: '0.1.0' };
       // 仅归一化一次，避免生成不同的 replay_id
       const normalized = this.normalizeReplayPayload(payload);
       const recordingEvents = this.buildMinimalRecordingEvents(normalized);
@@ -266,18 +255,35 @@ export class ReplayEnvelopeSender {
         }
       }
       if (normalized.trace_ids) replayEventObj.trace_ids = normalized.trace_ids;
-      const replayJsonBytes = this.encodeUtf8(JSON.stringify(replayEventObj));
-      const recordingJsonBytes = this.buildRecordingBytes(normalized, recordingEvents);
+      const replayEventJson = JSON.stringify(replayEventObj);
+      const recordingJson = JSON.stringify(recordingEvents);
+      // 根据 Android SDK 实现，移动端 replay envelope 格式为：
+      // 单个 replay_video 类型的 item，payload 为 MessagePack 编码的 map：
+      // { "replay_event": <JSON bytes>, "replay_recording": <JSON bytes>, "replay_video": <video bytes> }
+      // replay_recording 格式: {"segment_id": N}\n[RRWeb events array]
 
-      // Android 对齐：使用 msgpack 格式打包 replay_event、replay_recording 和 replay_video 为一个 item
-      // relay expects the payload to be in this exact order: [event,rrweb,video]
       const videoBytes = this.readVideoBytes(payload.videoPath);
-      const msgpackBytes = this.buildMsgpackForReplay(replayJsonBytes, recordingJsonBytes, videoBytes);
-      if (msgpackBytes && msgpackBytes.length > 0) {
-        // 使用 replay_video 作为 item type（与 Android 平台一致）
-        const videoHeader: ItemHeaderReplayVideo = { type: 'replay_video', length: msgpackBytes.length };
-        pushLine(JSON.stringify(videoHeader));
-        pushBytes(msgpackBytes);
+
+      if (videoBytes && videoBytes.length > 0) {
+        // 构建 replay_event JSON bytes
+        const replayEventBytes = this.encodeUtf8(replayEventJson);
+        
+        // 构建 replay_recording: {"segment_id": N}\n[RRWeb events array]
+        const segmentMeta = JSON.stringify({ segment_id: normalized.segment_id ?? 0 });
+        const recordingPayload = segmentMeta + '\n' + recordingJson;
+        const recordingBytes = this.encodeUtf8(recordingPayload);
+        
+        // 使用 MessagePack 编码 map: { replay_event, replay_recording, replay_video }
+        const msgpackPayload = this.serializeToMsgpack({
+          'replay_event': replayEventBytes,
+          'replay_recording': recordingBytes,
+          'replay_video': videoBytes
+        });
+        
+        // 发送单个 replay_video 类型的 item
+        const itemHeader = JSON.stringify({ type: 'replay_video', length: msgpackPayload.length });
+        pushLine(itemHeader);
+        pushBytes(msgpackPayload);
       }
 
       const body = this.concat(parts);
@@ -317,7 +323,6 @@ export class ReplayEnvelopeSender {
       ReplayEnvelopeSender.nextSendAfterMs = Date.now() + this.jitter(back);
       return false;
     } catch (err) {
-      console.error('[SentryTrace] ReplayEnvelopeSender: sendBinary failed with error: ' + String(err));
       return false;
     }
   }
@@ -347,12 +352,58 @@ export class ReplayEnvelopeSender {
     return out;
   }
 
+  /**
+   * Serialize a map of string keys to byte arrays using MessagePack format.
+   * Format matches Android SDK: map header + (string key + binary value) pairs
+   */
+  private serializeToMsgpack(map: Record<string, Uint8Array>): Uint8Array {
+    const chunks: Array<Uint8Array> = [];
+    const keys = Object.keys(map);
+    
+    // Write map header: 0x80 | map.size (fixmap for up to 15 elements)
+    chunks.push(new Uint8Array([0x80 | keys.length]));
+    
+    for (const key of keys) {
+      const keyBytes = this.encodeUtf8(key);
+      const valueBytes = map[key];
+      
+      // Pack the key as a string (str 8 format: 0xd9 + 1-byte length + string bytes)
+      chunks.push(new Uint8Array([0xd9, keyBytes.length]));
+      chunks.push(keyBytes);
+      
+      // Pack the value as binary (bin 32 format: 0xc6 + 4-byte big-endian length + bytes)
+      const lenBytes = new Uint8Array(4);
+      const len = valueBytes.length;
+      lenBytes[0] = (len >>> 24) & 0xff;
+      lenBytes[1] = (len >>> 16) & 0xff;
+      lenBytes[2] = (len >>> 8) & 0xff;
+      lenBytes[3] = len & 0xff;
+      chunks.push(new Uint8Array([0xc6]));
+      chunks.push(lenBytes);
+      chunks.push(valueBytes);
+    }
+    
+    return this.concat(chunks);
+  }
+
   private normalizeReplayId(id: string): string {
     if (!id || id.length === 0) {
       return '';
     }
-    // Return the raw hex string (remove hyphens if any)
-    return id.replace(/-/g, '').toLowerCase();
+    const hex: Array<string> = [];
+    let acc = 0;
+    for (let i = 0; i < id.length; i++) {
+      acc = (acc * 131 + (id.charCodeAt(i) & 0xffff)) >>> 0;
+      const h = (acc & 0xff).toString(16);
+      hex.push(h.length === 1 ? ('0' + h) : h);
+      if (hex.length >= 32) {
+        break;
+      }
+    }
+    while (hex.length < 32) {
+      hex.push('00');
+    }
+    return hex.join('').slice(0, 32).toLowerCase();
   }
 
   // 安全地解码 UTF-8（限制最大长度，避免编译器 TextDecoder 依赖）
@@ -370,7 +421,7 @@ export class ReplayEnvelopeSender {
     const pushLine = (text: string): void => { parts.push(this.encodeUtf8(text + '\n')); };
     const pushBytes = (bytes: Uint8Array): void => { parts.push(bytes); parts.push(this.encodeUtf8('\n')); };
 
-    const sdk: SdkInfo = { name: 'sentry.dart.flutter', version: '8.12.0' };
+    const sdk: SdkInfo = { name: 'sentry.javascript.harmony', version: '0.1.0' };
     const normalized = this.normalizeReplayPayload(payload);
     const eventId: string = (normalized.replay_id && normalized.replay_id.length > 0) ? normalized.replay_id : this.generateUuidV4();
     (normalized as ReplayPayload).replay_id = eventId;
@@ -387,7 +438,7 @@ export class ReplayEnvelopeSender {
       replay_start_timestamp: (normalized.replay_start_timestamp ?? Math.floor(Date.now() / 1000)),
       urls: normalized.urls,
       replay_type: normalized.replay_type,
-      platform: (normalized.platform && normalized.platform.length > 0) ? normalized.platform : 'other',
+      platform: (normalized.platform && normalized.platform.length > 0) ? normalized.platform : 'android',
     };
     if (normalized.error_ids && normalized.error_ids.length > 0) {
       replayEventObj.error_ids = normalized.error_ids;
@@ -476,8 +527,6 @@ export class ReplayEnvelopeSender {
       if (metrics.frameCount && metrics.frameCount > 0) {
         frameCount = metrics.frameCount;
       }
-      // 注意：patchMp4Durations 会直接修改原始视频文件
-      // 为了安全，不修改原始文件，直接上传原始文件
     } else {
       frameCount = Math.max(1, Math.floor((durationMs / 1000) * frameRate));
     }
@@ -488,7 +537,7 @@ export class ReplayEnvelopeSender {
       const videoPayload: RRWebVideoPayload = {
         segmentId: payload.segment_id ?? 0,
         durationMs,
-        duration: durationMs,
+        duration: durationMs,  // duration in milliseconds per Sentry mobile replay spec
         frameCount,
         frameRateType: 'constant',
         frameRate,
@@ -780,11 +829,11 @@ export class ReplayEnvelopeSender {
       try {
         const statFs = fs.statSync(path);
         size = statFs && typeof statFs.size === 'number' ? (statFs.size as number) : 0;
-      } catch (_) {
+      } catch (statErr) {
         try {
           const st = fileio.statSync(path);
           size = st && typeof st.size === 'number' ? (st.size as number) : 0;
-        } catch (_) {
+        } catch (fileioErr) {
           size = 0;
         }
       }
@@ -1082,7 +1131,14 @@ export class ReplayEnvelopeSender {
     if (!out.replay_id) out.replay_id = payload.replay_id ?? payload.sessionId;
     
     if (out.replay_id) {
-      out.replay_id = this.normalizeReplayId(out.replay_id);
+      const noDash = out.replay_id.replace(/-/g, '');
+      if (/^[0-9a-fA-F]{32}$/.test(noDash)) {
+        // Format as standard UUID (hyphenated)
+        const low = noDash.toLowerCase();
+        out.replay_id = low.substring(0, 8) + '-' + low.substring(8, 12) + '-' + low.substring(12, 16) + '-' + low.substring(16, 20) + '-' + low.substring(20);
+      } else {
+        out.replay_id = this.normalizeReplayId(out.replay_id);
+      }
     }
     
     if (typeof out.segment_id !== 'number') out.segment_id = 0;
@@ -1110,99 +1166,17 @@ export class ReplayEnvelopeSender {
     return out;
   }
 
-  private buildMsgpackForReplay(replayEventEncoded: Uint8Array, replayRecordingEncoded: Uint8Array, replayVideoEncoded?: Uint8Array): Uint8Array {
+  private buildMsgpackForReplay(replayEventJson: Uint8Array, replayRecordingJson: Uint8Array, replayVideoBytes?: Uint8Array): Uint8Array {
     const entries: Array<MsgpackEntry> = [];
-    entries.push({ key: 'replay_event', value: replayEventEncoded });
-    entries.push({ key: 'replay_recording', value: replayRecordingEncoded });
-    if (replayVideoEncoded && replayVideoEncoded.length > 0) entries.push({ key: 'replay_video', value: replayVideoEncoded });
+    entries.push({ key: 'replay_event', value: replayEventJson });
+    entries.push({ key: 'replay_recording', value: replayRecordingJson });
+    if (replayVideoBytes && replayVideoBytes.length > 0) entries.push({ key: 'replay_video', value: replayVideoBytes });
     const parts: Array<Uint8Array> = []; const size = entries.length;
     if (size <= 15) parts.push(new Uint8Array([0x80 | size]));
     else if (size <= 0xffff) parts.push(new Uint8Array([0xDE, (size >> 8) & 0xff, size & 0xff]));
     else parts.push(new Uint8Array([0xDF, (size >> 24) & 0xff, (size >> 16) & 0xff, (size >> 8) & 0xff, size & 0xff]));
     for (let i = 0; i < entries.length; i++) { const e = entries[i]; parts.push(this.encodeMsgpackStr(e.key)); parts.push(this.encodeMsgpackBin(e.value)); }
     return this.concat(parts);
-  }
-
-  private encodeMsgpack(val: number | string | boolean | Object | null | undefined): Uint8Array {
-    if (val === null || val === undefined) return new Uint8Array([0xC0]);
-    if (val === true) return new Uint8Array([0xC3]);
-    if (val === false) return new Uint8Array([0xC2]);
-    if (typeof val === 'number') {
-      if (Math.floor(val) === val) {
-        return this.encodeMsgpackInt(val);
-      } else {
-        return this.encodeMsgpackFloat(val);
-      }
-    }
-    if (typeof val === 'string') {
-      return this.encodeMsgpackStr(val);
-    }
-    if (Array.isArray(val)) {
-      const parts: Array<Uint8Array> = [];
-      const len = val.length;
-      if (len <= 15) parts.push(new Uint8Array([0x90 | len]));
-      else if (len <= 0xffff) parts.push(new Uint8Array([0xDC, (len >> 8) & 0xff, len & 0xff]));
-      else parts.push(new Uint8Array([0xDD, (len >> 24) & 0xff, (len >> 16) & 0xff, (len >> 8) & 0xff, len & 0xff]));
-      const arr = val as Array<number | string | boolean | Object | null | undefined>;
-      for (let i = 0; i < len; i++) {
-        parts.push(this.encodeMsgpack(arr[i]));
-      }
-      return this.concat(parts);
-    }
-    if (typeof val === 'object') {
-      const parts: Array<Uint8Array> = [];
-      const keys = Object.keys(val);
-      const len = keys.length;
-      if (len <= 15) parts.push(new Uint8Array([0x80 | len]));
-      else if (len <= 0xffff) parts.push(new Uint8Array([0xDE, (len >> 8) & 0xff, len & 0xff]));
-      else parts.push(new Uint8Array([0xDF, (len >> 24) & 0xff, (len >> 16) & 0xff, (len >> 8) & 0xff, len & 0xff]));
-      const obj = val as Record<string, number | string | boolean | Object | null | undefined>;
-      for (let i = 0; i < len; i++) {
-        const k = keys[i];
-        parts.push(this.encodeMsgpackStr(k));
-        parts.push(this.encodeMsgpack(obj[k]));
-      }
-      return this.concat(parts);
-    }
-    return new Uint8Array([0xC0]);
-  }
-
-  private encodeMsgpackInt(n: number): Uint8Array {
-    if (n >= 0 && n <= 127) return new Uint8Array([n]);
-    if (n >= -32 && n <= -1) return new Uint8Array([0xe0 | (n + 32)]); // fixneg handled by JS byte conversion?
-    
-    if (n >= 0 && n <= 0xff) return new Uint8Array([0xCC, n]);
-    if (n >= 0 && n <= 0xffff) return new Uint8Array([0xCD, (n >> 8) & 0xff, n & 0xff]);
-    if (n >= 0 && n <= 0xffffffff) return new Uint8Array([0xCE, (n >> 24) & 0xff, (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff]);
-    
-    // Add support for 64-bit integers (timestamps)
-    if (n > 0xffffffff && n <= Number.MAX_SAFE_INTEGER) {
-      return this.encodeMsgpackUint64(n);
-    }
-
-    // Int64/UInt64 support in JS is tricky with number type. Assume double for large numbers or use float64.
-    // But let's try float64 for safety if > 32bit int.
-    return this.encodeMsgpackFloat(n);
-  }
-
-  private encodeMsgpackUint64(n: number): Uint8Array {
-    const buf = new ArrayBuffer(9);
-    const view = new DataView(buf);
-    view.setUint8(0, 0xCF); // uint 64
-    const high = Math.floor(n / 4294967296);
-    const low = n % 4294967296; 
-    view.setUint32(1, high);
-    view.setUint32(5, low);
-    return new Uint8Array(buf);
-  }
-
-  private encodeMsgpackFloat(n: number): Uint8Array {
-    // Float 64 (0xCB)
-    const buf = new ArrayBuffer(9);
-    const view = new DataView(buf);
-    view.setUint8(0, 0xCB);
-    view.setFloat64(1, n, false); // Big Endian
-    return new Uint8Array(buf);
   }
 
   private encodeMsgpackStr(s: string): Uint8Array {
@@ -1259,3 +1233,5 @@ export class ReplayEnvelopeSender {
 }
 
 export default ReplayEnvelopeSender;
+
+

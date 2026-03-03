@@ -10,7 +10,6 @@ import 'package:meta/meta.dart';
 import '../../../sentry_flutter.dart';
 import '../../replay/replay_config.dart';
 import '../native_app_start.dart';
-import '../native_frames.dart';
 import '../sentry_native_binding.dart';
 import '../sentry_native_invoker.dart';
 import 'binding.dart' as binding;
@@ -37,14 +36,13 @@ class SentryNative with SentryNativeSafeInvoker implements SentryNativeBinding {
 
   SentryNative(this.options);
 
-  void _logNotSupported(String operation) => options.logger(
+  void _logNotSupported(String operation) => options.log(
       SentryLevel.debug, 'SentryNative: $operation is not supported');
 
   @override
   FutureOr<void> init(Hub hub) {
     if (!options.enableNativeCrashHandling) {
-      options.logger(
-          SentryLevel.info, 'SentryNative crash handling is disabled');
+      options.log(SentryLevel.info, 'SentryNative crash handling is disabled');
     } else {
       tryCatchSync("init", () {
         final cOptions = createOptions(options);
@@ -73,12 +71,15 @@ class SentryNative with SentryNativeSafeInvoker implements SentryNativeBinding {
       native.options_set_max_breadcrumbs(cOptions, options.maxBreadcrumbs);
       if (options.proxy != null) {
         // sentry-native expects a single string and it doesn't support different types or authentication
-        options.logger(SentryLevel.warning,
+        options.log(SentryLevel.warning,
             'SentryNative: setting a proxy is currently not supported');
       }
 
       if (crashpadPath != null) {
         native.options_set_handler_path(cOptions, c.str(crashpadPath));
+      } else {
+        options.log(
+            SentryLevel.warning, 'SentryNative: could not find crashpad path');
       }
 
       return cOptions;
@@ -101,14 +102,13 @@ class SentryNative with SentryNativeSafeInvoker implements SentryNativeBinding {
   @override
   FutureOr<void> captureEnvelope(
       Uint8List envelopeData, bool containsUnhandledException) {
-    throw UnsupportedError('$SentryNative.captureEnvelope() is not suppurted');
+    throw UnsupportedError('$SentryNative.captureEnvelope() is not supported');
   }
 
   @override
-  FutureOr<void> beginNativeFrames() {}
-
-  @override
-  FutureOr<NativeFrames?> endNativeFrames(SentryId id) => null;
+  FutureOr<void> captureStructuredEnvelope(SentryEnvelope envelope) {
+    throw UnsupportedError("Not supported on this platform");
+  }
 
   @override
   FutureOr<void> setUser(SentryUser? user) {
@@ -116,7 +116,7 @@ class SentryNative with SentryNativeSafeInvoker implements SentryNativeBinding {
       tryCatchSync('remove_user', native.remove_user);
     } else {
       tryCatchSync('set_user', () {
-        var cUser = user.toJson().toNativeValue(options.logger);
+        var cUser = user.toJson().toNativeValue(options.log);
         native.set_user(cUser);
       });
     }
@@ -125,7 +125,7 @@ class SentryNative with SentryNativeSafeInvoker implements SentryNativeBinding {
   @override
   FutureOr<void> addBreadcrumb(Breadcrumb breadcrumb) {
     tryCatchSync('add_breadcrumb', () {
-      var cBreadcrumb = breadcrumb.toJson().toNativeValue(options.logger);
+      var cBreadcrumb = breadcrumb.toJson().toNativeValue(options.log);
       native.add_breadcrumb(cBreadcrumb);
     });
   }
@@ -147,13 +147,13 @@ class SentryNative with SentryNativeSafeInvoker implements SentryNativeBinding {
   @override
   FutureOr<void> setContexts(String key, dynamic value) {
     tryCatchSync('set_context', () {
-      final cValue = dynamicToNativeValue(value, options.logger);
+      final cValue = dynamicToNativeValue(value, options.log);
       if (cValue != null) {
         final cKey = key.toNativeUtf8();
         native.set_context(cKey.cast(), cValue);
         malloc.free(cKey);
       } else {
-        options.logger(SentryLevel.warning,
+        options.log(SentryLevel.warning,
             'SentryNative: failed to set context $key - value couldn\'t be converted to native');
       }
     });
@@ -171,13 +171,13 @@ class SentryNative with SentryNativeSafeInvoker implements SentryNativeBinding {
   @override
   FutureOr<void> setExtra(String key, dynamic value) {
     tryCatchSync('set_extra', () {
-      final cValue = dynamicToNativeValue(value, options.logger);
+      final cValue = dynamicToNativeValue(value, options.log);
       if (cValue != null) {
         final cKey = key.toNativeUtf8();
         native.set_extra(cKey.cast(), cValue);
         malloc.free(cKey);
       } else {
-        options.logger(SentryLevel.warning,
+        options.log(SentryLevel.warning,
             'SentryNative: failed to set extra $key - value couldn\'t be converted to native');
       }
     });
@@ -243,13 +243,13 @@ class SentryNative with SentryNativeSafeInvoker implements SentryNativeBinding {
               native.value_get_length(cImages), (index) {
             final cImage = native.value_get_by_index(cImages, index);
             return DebugImage(
-              type: cImage.get('type').castPrimitive(options.logger) ?? '',
-              imageAddr: cImage.get('image_addr').castPrimitive(options.logger),
-              imageSize: cImage.get('image_size').castPrimitive(options.logger),
-              codeFile: cImage.get('code_file').castPrimitive(options.logger),
-              debugId: cImage.get('debug_id').castPrimitive(options.logger),
-              debugFile: cImage.get('debug_file').castPrimitive(options.logger),
-              codeId: cImage.get('code_id').castPrimitive(options.logger),
+              type: cImage.get('type').castPrimitive(options.log) ?? '',
+              imageAddr: cImage.get('image_addr').castPrimitive(options.log),
+              imageSize: cImage.get('image_size').castPrimitive(options.log),
+              codeFile: cImage.get('code_file').castPrimitive(options.log),
+              debugId: cImage.get('debug_id').castPrimitive(options.log),
+              debugFile: cImage.get('debug_file').castPrimitive(options.log),
+              codeId: cImage.get('code_id').castPrimitive(options.log),
             );
           });
           return images;
@@ -278,9 +278,33 @@ class SentryNative with SentryNativeSafeInvoker implements SentryNativeBinding {
   }
 
   @override
-  FutureOr<SentryId> captureReplay(bool isCrash) {
+  FutureOr<void> setLastErrorEventId(SentryId eventId) {}
+
+  @override
+  FutureOr<SentryId> captureReplay() {
     _logNotSupported('capturing replay');
     return SentryId.empty();
+  }
+
+  @override
+  FutureOr<void> startSession({bool ignoreDuration = false}) {
+    _logNotSupported('starting session');
+  }
+
+  @override
+  FutureOr<void> captureSession() {
+    _logNotSupported('capturing session');
+  }
+
+  @override
+  FutureOr<Map<dynamic, dynamic>?> getSession() {
+    _logNotSupported('getting session');
+    return null;
+  }
+
+  @override
+  FutureOr<void> updateSession({int? errors, String? status}) {
+    _logNotSupported('updating session');
   }
 }
 
@@ -304,7 +328,7 @@ extension on binding.sentry_value_u {
     }
   }
 
-  T? castPrimitive<T>(SentryLogger logger) {
+  T? castPrimitive<T>(SdkLogCallback logger) {
     if (SentryNative.native.value_is_null(this) == 1) {
       return null;
     }
@@ -332,7 +356,7 @@ extension on binding.sentry_value_u {
 }
 
 binding.sentry_value_u? dynamicToNativeValue(
-    dynamic value, SentryLogger logger) {
+    dynamic value, SdkLogCallback logger) {
   if (value is String) {
     return value.toNativeValue();
   } else if (value is int) {
@@ -384,7 +408,7 @@ extension on bool {
 }
 
 extension on Map<String, dynamic> {
-  binding.sentry_value_u toNativeValue(SentryLogger logger) {
+  binding.sentry_value_u toNativeValue(SdkLogCallback logger) {
     final cObject = SentryNative.native.value_new_object();
     for (final entry in entries) {
       final cValue = dynamicToNativeValue(entry.value, logger);
@@ -395,7 +419,7 @@ extension on Map<String, dynamic> {
 }
 
 extension on List<dynamic> {
-  binding.sentry_value_u toNativeValue(SentryLogger logger) {
+  binding.sentry_value_u toNativeValue(SdkLogCallback logger) {
     final cObject = SentryNative.native.value_new_list();
     for (final value in this) {
       final cValue = dynamicToNativeValue(value, logger);
@@ -415,7 +439,8 @@ String? _getDefaultCrashpadPath() {
       final appDir = Platform.resolvedExecutable.substring(0, lastSeparator);
       final candidates = [
         '$appDir${Platform.pathSeparator}crashpad_handler',
-        '$appDir${Platform.pathSeparator}bin/crashpad_handler'
+        '$appDir${Platform.pathSeparator}bin${Platform.pathSeparator}crashpad_handler',
+        '$appDir${Platform.pathSeparator}lib${Platform.pathSeparator}crashpad_handler'
       ];
       return candidates.firstWhereOrNull((path) => File(path).existsSync());
     }

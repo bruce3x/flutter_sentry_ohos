@@ -1,15 +1,15 @@
 @TestOn('vm')
-library dart_test;
+library;
 
 import 'dart:async';
 
 import 'package:sentry/sentry.dart';
 import 'package:sentry/src/load_dart_debug_images_integration.dart';
+import 'package:sentry/src/platform/mock_platform.dart';
 import 'package:sentry/src/sentry_stack_trace_factory.dart';
 import 'package:test/test.dart';
 
-import 'mocks/mock_platform.dart';
-import 'mocks/mock_platform_checker.dart';
+import 'mocks/mock_runtime_checker.dart';
 import 'test_utils.dart';
 
 void main() {
@@ -26,13 +26,14 @@ void main() {
 
       setUp(() {
         fixture = Fixture();
-        fixture.options.platformChecker =
-            MockPlatformChecker(platform: platform);
+        fixture.options.platform = platform;
+        fixture.callIntegration();
       });
 
       test('adds itself to sdk.integrations', () {
         expect(
-          fixture.options.sdk.integrations.contains('loadDartImageIntegration'),
+          fixture.options.sdk.integrations
+              .contains(LoadDartDebugImagesIntegration.integrationName),
           true,
         );
       });
@@ -41,7 +42,7 @@ void main() {
         expect(fixture.options.eventProcessors.length, 1);
         expect(
           fixture.options.eventProcessors.first.runtimeType.toString(),
-          'LoadImageIntegrationEventProcessor',
+          'LoadDartDebugImagesIntegrationEventProcessor',
         );
       });
 
@@ -192,10 +193,77 @@ isolate_dso_base: 10000000
     });
   }
 
-  test('debug image is null on unsupported platforms', () async {
+  test('does add itself to sdk.integrations if split debug info is true', () {
     final fixture = Fixture()
-      ..options.platformChecker =
-          MockPlatformChecker(platform: MockPlatform.linux());
+      ..options.runtimeChecker = MockRuntimeChecker(isSplitDebugInfo: true);
+    fixture.callIntegration();
+    expect(
+      fixture.options.sdk.integrations
+          .contains(LoadDartDebugImagesIntegration.integrationName),
+      isTrue,
+    );
+  });
+
+  test('does add itself to sdk.integrations if obfuscation is true', () {
+    final fixture = Fixture()
+      ..options.runtimeChecker = MockRuntimeChecker(isObfuscated: true);
+    fixture.callIntegration();
+    expect(
+      fixture.options.sdk.integrations
+          .contains(LoadDartDebugImagesIntegration.integrationName),
+      isTrue,
+    );
+  });
+
+  test(
+      'does not add itself to sdk.integrations if app obfuscation and split debug info is false',
+      () {
+    final fixture = Fixture()..options.runtimeChecker = MockRuntimeChecker();
+    fixture.callIntegration();
+    expect(
+      fixture.options.sdk.integrations
+          .contains(LoadDartDebugImagesIntegration.integrationName),
+      false,
+    );
+  });
+
+  test('does add event processor to options if split debug info is true', () {
+    final fixture = Fixture()
+      ..options.runtimeChecker = MockRuntimeChecker(isSplitDebugInfo: true);
+    fixture.callIntegration();
+    expect(fixture.options.eventProcessors.length, 1);
+  });
+
+  test('does add event processor to options if obfuscation is true', () {
+    final fixture = Fixture()
+      ..options.runtimeChecker = MockRuntimeChecker(isObfuscated: true);
+    fixture.callIntegration();
+    expect(fixture.options.eventProcessors.length, 1);
+  });
+
+  test(
+      'does not add event processor to options if app obfuscation and split debug info is false',
+      () {
+    final fixture = Fixture()..options.runtimeChecker = MockRuntimeChecker();
+    fixture.callIntegration();
+    expect(fixture.options.eventProcessors.length, 0);
+  });
+
+  test('does not add itself to sdk.integrations if platform is web', () {
+    final fixture = Fixture()
+      ..options.runtimeChecker = MockRuntimeChecker(isObfuscated: true)
+      ..options.platform = MockPlatform(isWeb: true);
+    fixture.callIntegration();
+    expect(
+      fixture.options.sdk.integrations
+          .contains(LoadDartDebugImagesIntegration.integrationName),
+      false,
+    );
+  });
+
+  test('debug image is null on unsupported platforms', () async {
+    final fixture = Fixture()..options.platform = MockPlatform.linux();
+    fixture.callIntegration();
     final event = fixture.newEvent(stackTrace: fixture.parse('''
 *** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
 build_id: 'b680cb890f9e3c12a24b172d050dec73'
@@ -208,10 +276,12 @@ isolate_dso_base: 40000000
 }
 
 class Fixture {
-  final options = defaultTestOptions();
+  final options = defaultTestOptions()
+    ..runtimeChecker =
+        MockRuntimeChecker(isObfuscated: true, isSplitDebugInfo: true);
   late final factory = SentryStackTraceFactory(options);
 
-  Fixture() {
+  void callIntegration() {
     final integration = LoadDartDebugImagesIntegration();
     integration.call(Hub(options), options);
   }

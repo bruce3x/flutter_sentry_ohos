@@ -1,15 +1,12 @@
 import 'package:meta/meta.dart';
 
 import 'unknown_renderer.dart'
-    if (dart.library.html) 'html_renderer.dart'
     if (dart.library.js_interop) 'web_renderer.dart'
     if (dart.library.io) 'io_renderer.dart' as implementation;
 
 @internal
 class RendererWrapper {
-  FlutterRenderer? getRenderer() {
-    return implementation.getRenderer();
-  }
+  late final FlutterRenderer? renderer = implementation.getRenderer();
 }
 
 enum FlutterRenderer {
@@ -19,10 +16,13 @@ enum FlutterRenderer {
   /// https://docs.flutter.dev/perf/impeller
   impeller,
 
-  /// https://docs.flutter.dev/platform-integration/web/renderers
+  /// https://docs.flutter.dev/platform-integration/web/renderers#canvaskit
   canvasKit,
 
-  /// https://docs.flutter.dev/platform-integration/web/renderers
+  /// https://docs.flutter.dev/platform-integration/web/renderers#skwasm
+  skwasm,
+
+  /// HTML is still there but considered legacy
   html,
   unknown,
 }

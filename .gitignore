@@ -4,6 +4,7 @@
 .packages
 .dart_tool/
 build/
+packages
 pubspec.lock
 .pub/
 .idea/libraries
@@ -13,6 +14,7 @@ build/
 .cxx/
 .vscode/
 .fvm/
+.fvmrc
 
 .test_coverage.dart
 dart/coverage/*
@@ -27,6 +29,15 @@ isar/coverage/*
 
 pubspec.lock
 Podfile.lock
+sentry-java/*
 
 .gradle
 flutter/.gradle
+
+# CI gate logs and internal information (should not be committed)
+flutter/information/
+
+# sentry-native source (fetched via FetchContent during build, should not be committed)
+flutter/sentry-native/*
+!flutter/sentry-native/CMakeCache.txt
+!flutter/sentry-native/sentry-native.cmake

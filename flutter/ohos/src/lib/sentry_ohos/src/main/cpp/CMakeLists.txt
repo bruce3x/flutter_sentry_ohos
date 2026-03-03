@@ -33,5 +33,3 @@ target_link_libraries(replay_encoder PUBLIC
     libnative_window.so
     libnative_buffer.so
 )
-
-

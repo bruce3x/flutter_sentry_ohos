@@ -6,8 +6,6 @@ import '../sentry.dart';
 
 @internal
 class SentryTracesSampler {
-  static const _defaultSampleRate = 1.0;
-
   final SentryOptions _options;
   final Random _random;
 
@@ -16,12 +14,15 @@ class SentryTracesSampler {
     Random? random,
   }) : _random = random ?? Random() {
     if (_options.tracesSampler != null && _options.tracesSampleRate != null) {
-      _options.logger(SentryLevel.warning,
+      _options.log(SentryLevel.warning,
           'Both tracesSampler and traceSampleRate are set. tracesSampler will take precedence and fallback to traceSampleRate if it returns null.');
     }
   }
 
-  SentryTracesSamplingDecision sample(SentrySamplingContext samplingContext) {
+  SentryTracesSamplingDecision sample(
+    SentrySamplingContext samplingContext,
+    double sampleRand,
+  ) {
     final samplingDecision =
         samplingContext.transactionContext.samplingDecision;
     if (samplingDecision != null) {
@@ -31,15 +32,12 @@ class SentryTracesSampler {
     final tracesSampler = _options.tracesSampler;
     if (tracesSampler != null) {
       try {
-        final result = tracesSampler(samplingContext);
-        if (result != null) {
-          return SentryTracesSamplingDecision(
-            _sample(result),
-            sampleRate: result,
-          );
+        final sampleRate = tracesSampler(samplingContext);
+        if (sampleRate != null) {
+          return _makeSampleDecision(sampleRate, sampleRand);
         }
       } catch (exception, stackTrace) {
-        _options.logger(
+        _options.log(
           SentryLevel.error,
           'The tracesSampler callback threw an exception',
           exception: exception,
@@ -58,16 +56,8 @@ class SentryTracesSampler {
     }
 
     double? optionsRate = _options.tracesSampleRate;
-    double? defaultRate =
-        // ignore: deprecated_member_use_from_same_package
-        _options.enableTracing == true ? _defaultSampleRate : null;
-    double? optionsOrDefaultRate = optionsRate ?? defaultRate;
-
-    if (optionsOrDefaultRate != null) {
-      return SentryTracesSamplingDecision(
-        _sample(optionsOrDefaultRate),
-        sampleRate: optionsOrDefaultRate,
-      );
+    if (optionsRate != null) {
+      return _makeSampleDecision(optionsRate, sampleRand);
     }
 
     return SentryTracesSamplingDecision(false);
@@ -78,8 +68,20 @@ class SentryTracesSampler {
     if (optionsRate == null || !tracesSamplingDecision.sampled) {
       return false;
     }
-    return _sample(optionsRate);
+    return _isSampled(optionsRate);
   }
 
-  bool _sample(double result) => !(result < _random.nextDouble());
+  SentryTracesSamplingDecision _makeSampleDecision(
+    double sampleRate,
+    double sampleRand,
+  ) {
+    final sampled = _isSampled(sampleRate, sampleRand: sampleRand);
+    return SentryTracesSamplingDecision(sampled,
+        sampleRate: sampleRate, sampleRand: sampleRand);
+  }
+
+  bool _isSampled(double sampleRate, {double? sampleRand}) {
+    final rand = sampleRand ?? _random.nextDouble();
+    return rand <= sampleRate;
+  }
 }

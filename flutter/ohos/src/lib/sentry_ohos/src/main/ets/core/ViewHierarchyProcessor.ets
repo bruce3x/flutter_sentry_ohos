@@ -132,7 +132,7 @@ export class ViewHierarchyProcessor {
     const O_CREAT = 0o100; // create if not exists
     const O_RDWR = 0o2;    // read/write
     const fd = fileio.openSync(filePath, O_CREAT | O_RDWR, 0o666);
-    fileio.writeSync(fd, new Uint8Array(pngBuffer));
+    fileio.writeSync(fd, pngBuffer);
     fileio.closeSync(fd);
     const rel = (pixelMap as PixelMapWithRelease).release;
     if (typeof rel === 'function') (pixelMap as PixelMapWithRelease).release();

@@ -1,16 +1,11 @@
 package io.sentry.flutter
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
-import android.content.res.Configuration
-import android.graphics.Point
-import android.graphics.Rect
 import android.os.Build
-import android.os.Build.VERSION
-import android.os.Build.VERSION_CODES
 import android.os.Looper
 import android.util.Log
-import android.view.WindowManager
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -20,12 +15,8 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.sentry.Breadcrumb
 import io.sentry.DateUtils
-import io.sentry.Hint
 import io.sentry.HubAdapter
 import io.sentry.Sentry
-import io.sentry.SentryEvent
-import io.sentry.SentryOptions
-import io.sentry.android.core.ActivityFramesTracker
 import io.sentry.android.core.InternalSentrySdk
 import io.sentry.android.core.LoadClass
 import io.sentry.android.core.SentryAndroid
@@ -35,11 +26,9 @@ import io.sentry.android.core.performance.TimeSpan
 import io.sentry.android.replay.ReplayIntegration
 import io.sentry.android.replay.ScreenshotRecorderConfig
 import io.sentry.protocol.DebugImage
-import io.sentry.protocol.SdkVersion
 import io.sentry.protocol.SentryId
 import io.sentry.protocol.User
 import io.sentry.transport.CurrentDateProvider
-import java.io.File
 import java.lang.ref.WeakReference
 import kotlin.math.roundToInt
 
@@ -53,22 +42,8 @@ class SentryFlutterPlugin :
   private lateinit var channel: MethodChannel
   private lateinit var context: Context
   private lateinit var sentryFlutter: SentryFlutter
-  private lateinit var replay: ReplayIntegration
-
-  // Note: initial config because we don't yet have the numbers of the actual Flutter widget.
-  // See how SentryFlutterReplayRecorder.start() handles it. New settings will be set by setReplayConfig() method below.
-  private var replayConfig =
-    ScreenshotRecorderConfig(
-      recordingWidth = VIDEO_BLOCK_SIZE,
-      recordingHeight = VIDEO_BLOCK_SIZE,
-      scaleFactorX = 1.0f,
-      scaleFactorY = 1.0f,
-      frameRate = 1,
-      bitRate = 75000,
-    )
 
   private var activity: WeakReference<Activity>? = null
-  private var framesTracker: ActivityFramesTracker? = null
   private var pluginRegistrationTime: Long? = null
 
   override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
@@ -78,11 +53,7 @@ class SentryFlutterPlugin :
     channel = MethodChannel(flutterPluginBinding.binaryMessenger, "sentry_flutter")
     channel.setMethodCallHandler(this)
 
-    sentryFlutter =
-      SentryFlutter(
-        androidSdk = ANDROID_SDK,
-        nativeSdk = NATIVE_SDK,
-      )
+    sentryFlutter = SentryFlutter()
   }
 
   @Suppress("CyclomaticComplexMethod")
@@ -90,15 +61,12 @@ class SentryFlutterPlugin :
     call: MethodCall,
     result: Result,
   ) {
-    Log.d("Sentry", "onMethodCall = ${call.method}")
     when (call.method) {
       "initNativeSdk" -> initNativeSdk(call, result)
       "captureEnvelope" -> captureEnvelope(call, result)
-      "loadImageList" -> loadImageList(result)
+      "loadImageList" -> loadImageList(call, result)
       "closeNativeSdk" -> closeNativeSdk(result)
       "fetchNativeAppStart" -> fetchNativeAppStart(result)
-      "beginNativeFrames" -> beginNativeFrames(result)
-      "endNativeFrames" -> endNativeFrames(call.argument("id"), result)
       "setContexts" -> setContexts(call.argument("key"), call.argument("value"), result)
       "removeContexts" -> removeContexts(call.argument("key"), result)
       "setUser" -> setUser(call.argument("user"), result)
@@ -112,8 +80,7 @@ class SentryFlutterPlugin :
       "displayRefreshRate" -> displayRefreshRate(result)
       "nativeCrash" -> crash()
       "setReplayConfig" -> setReplayConfig(call, result)
-      "addReplayScreenshot" -> addReplayScreenshot(call.argument("path"), call.argument("timestamp"), result)
-      "captureReplay" -> captureReplay(call.argument("isCrash"), result)
+      "captureReplay" -> captureReplay(result)
       else -> result.notImplemented()
     }
   }
@@ -132,7 +99,6 @@ class SentryFlutterPlugin :
 
   override fun onDetachedFromActivity() {
     activity = null
-    framesTracker = null
   }
 
   override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
@@ -161,45 +127,29 @@ class SentryFlutterPlugin :
     SentryAndroid.init(context) { options ->
       sentryFlutter.updateOptions(options, args)
 
-      if (sentryFlutter.autoPerformanceTracingEnabled) {
-        framesTracker = ActivityFramesTracker(LoadClass(), options)
-      }
-
-      options.beforeSend = BeforeSendCallbackImpl(options.sdkVersion)
-
-      // Replace the default ReplayIntegration with a Flutter-specific recorder.
-      options.integrations.removeAll { it is ReplayIntegration }
-      val cacheDirPath = options.cacheDirPath
-      val replayOptions = options.experimental.sessionReplay
-      val isReplayEnabled = replayOptions.isSessionReplayEnabled || replayOptions.isSessionReplayForErrorsEnabled
-      if (cacheDirPath != null && isReplayEnabled) {
-        replay =
-          ReplayIntegration(
-            context,
-            dateProvider = CurrentDateProvider.getInstance(),
-            recorderProvider = { SentryFlutterReplayRecorder(channel, replay) },
-            recorderConfigProvider = {
-              Log.i(
-                "Sentry",
-                "Replay configuration requested. Returning: %dx%d at %d FPS, %d BPS".format(
-                  replayConfig.recordingWidth,
-                  replayConfig.recordingHeight,
-                  replayConfig.frameRate,
-                  replayConfig.bitRate,
-                ),
-              )
-              replayConfig
-            },
-            replayCacheProvider = null,
-          )
-        replay.breadcrumbConverter = SentryFlutterReplayBreadcrumbConverter()
-        options.addIntegration(replay)
-        options.setReplayController(replay)
-      } else {
-        options.setReplayController(null)
-      }
+      setupReplay(options)
     }
     result.success("")
+  }
+
+  private fun setupReplay(options: SentryAndroidOptions) {
+    // Replace the default ReplayIntegration with a Flutter-specific recorder.
+    options.integrations.removeAll { it is ReplayIntegration }
+    val replayOptions = options.sessionReplay
+    if (replayOptions.isSessionReplayEnabled || replayOptions.isSessionReplayForErrorsEnabled) {
+      replay =
+        ReplayIntegration(
+          context.applicationContext,
+          dateProvider = CurrentDateProvider.getInstance(),
+          recorderProvider = { SentryFlutterReplayRecorder(channel, replay!!) },
+          replayCacheProvider = null,
+        )
+      replay!!.breadcrumbConverter = SentryFlutterReplayBreadcrumbConverter()
+      options.addIntegration(replay!!)
+      options.setReplayController(replay)
+    } else {
+      options.setReplayController(null)
+    }
   }
 
   private fun fetchNativeAppStart(result: Result) {
@@ -302,52 +252,6 @@ class SentryFlutterPlugin :
         )
     }
   }
-
-  private fun beginNativeFrames(result: Result) {
-    if (!sentryFlutter.autoPerformanceTracingEnabled) {
-      result.success(null)
-      return
-    }
-
-    activity?.get()?.let {
-      framesTracker?.addActivity(it)
-    }
-    result.success(null)
-  }
-
-  private fun endNativeFrames(
-    id: String?,
-    result: Result,
-  ) {
-    val activity = activity?.get()
-    if (!sentryFlutter.autoPerformanceTracingEnabled || activity == null || id == null) {
-      if (id == null) {
-        Log.w("Sentry", "Parameter id cannot be null when calling endNativeFrames.")
-      }
-      result.success(null)
-      return
-    }
-
-    val sentryId = SentryId(id)
-    framesTracker?.setMetrics(activity, sentryId)
-    val metrics = framesTracker?.takeMetrics(sentryId)
-    val total = metrics?.get("frames_total")?.value?.toInt() ?: 0
-    val slow = metrics?.get("frames_slow")?.value?.toInt() ?: 0
-    val frozen = metrics?.get("frames_frozen")?.value?.toInt() ?: 0
-
-    if (total == 0 && slow == 0 && frozen == 0) {
-      result.success(null)
-    } else {
-      val frames =
-        mapOf<String, Any?>(
-          "totalFrames" to total,
-          "slowFrames" to slow,
-          "frozenFrames" to frozen,
-        )
-      result.success(frames)
-    }
-  }
-
   private fun setContexts(
     key: String?,
     value: Any?,
@@ -490,93 +394,57 @@ class SentryFlutterPlugin :
     result.error("3", "Envelope is null or empty", null)
   }
 
-  private fun loadImageList(result: Result) {
+  private fun loadImageList(
+    call: MethodCall,
+    result: Result,
+  ) {
     val options = HubAdapter.getInstance().options as SentryAndroidOptions
 
-    val newDebugImages = mutableListOf<Map<String, Any?>>()
-    val debugImages: List<DebugImage>? = options.debugImagesLoader.loadDebugImages()
-
-    debugImages?.let {
-      it.forEach { image ->
-        val item = mutableMapOf<String, Any?>()
-
-        item["image_addr"] = image.imageAddr
-        item["image_size"] = image.imageSize
-        item["code_file"] = image.codeFile
-        item["type"] = image.type
-        item["debug_id"] = image.debugId
-        item["code_id"] = image.codeId
-        item["debug_file"] = image.debugFile
-
-        newDebugImages.add(item)
+    val addresses = call.arguments() as List<String>? ?: listOf()
+    val debugImages =
+      if (addresses.isEmpty()) {
+        options.debugImagesLoader
+          .loadDebugImages()
+          ?.toList()
+          .serialize()
+      } else {
+        options.debugImagesLoader
+          .loadDebugImagesForAddresses(addresses.toSet())
+          ?.ifEmpty { options.debugImagesLoader.loadDebugImages() }
+          ?.toList()
+          .serialize()
       }
-    }
 
-    result.success(newDebugImages)
+    result.success(debugImages)
   }
+
+  private fun List<DebugImage>?.serialize() = this?.map { it.serialize() }
+
+  private fun DebugImage.serialize() =
+    mapOf(
+      "image_addr" to imageAddr,
+      "image_size" to imageSize,
+      "code_file" to codeFile,
+      "type" to type,
+      "debug_id" to debugId,
+      "code_id" to codeId,
+      "debug_file" to debugFile,
+    )
 
   private fun closeNativeSdk(result: Result) {
     HubAdapter.getInstance().close()
-    framesTracker?.stop()
-    framesTracker = null
 
     result.success("")
   }
 
-  private class BeforeSendCallbackImpl(
-    private val sdkVersion: SdkVersion?,
-  ) : SentryOptions.BeforeSendCallback {
-    override fun execute(
-      event: SentryEvent,
-      hint: Hint,
-    ): SentryEvent {
-      setEventOriginTag(event)
-      addPackages(event, sdkVersion)
-      return event
-    }
-  }
-
   companion object {
-    private const val FLUTTER_SDK = "sentry.dart.flutter"
-    private const val ANDROID_SDK = "sentry.java.android.flutter"
-    private const val NATIVE_SDK = "sentry.native.android.flutter"
+    @SuppressLint("StaticFieldLeak")
+    private var replay: ReplayIntegration? = null
+
     private const val NATIVE_CRASH_WAIT_TIME = 500L
 
-    private fun setEventOriginTag(event: SentryEvent) {
-      event.sdk?.let {
-        when (it.name) {
-          FLUTTER_SDK -> setEventEnvironmentTag(event, "flutter", "dart")
-          ANDROID_SDK -> setEventEnvironmentTag(event, environment = "java")
-          NATIVE_SDK -> setEventEnvironmentTag(event, environment = "native")
-          else -> return
-        }
-      }
-    }
-
-    private fun setEventEnvironmentTag(
-      event: SentryEvent,
-      origin: String = "android",
-      environment: String,
-    ) {
-      event.setTag("event.origin", origin)
-      event.setTag("event.environment", environment)
-    }
-
-    private fun addPackages(
-      event: SentryEvent,
-      sdk: SdkVersion?,
-    ) {
-      event.sdk?.let {
-        if (it.name == FLUTTER_SDK) {
-          sdk?.packageSet?.forEach { sentryPackage ->
-            it.addPackage(sentryPackage.name, sentryPackage.version)
-          }
-          sdk?.integrationSet?.forEach { integration ->
-            it.addIntegration(integration)
-          }
-        }
-      }
-    }
+    @JvmStatic
+    fun privateSentryGetReplayIntegration(): ReplayIntegration? = replay
 
     private fun crash() {
       val exception = RuntimeException("FlutterSentry Native Integration: Sample RuntimeException")
@@ -611,19 +479,6 @@ class SentryFlutterPlugin :
     result.success(serializedScope)
   }
 
-  private fun addReplayScreenshot(
-    path: String?,
-    timestamp: Long?,
-    result: Result,
-  ) {
-    if (path == null || timestamp == null) {
-      result.error("5", "Arguments are null", null)
-      return
-    }
-    replay.onScreenshotRecorded(File(path), timestamp)
-    result.success("")
-  }
-
   private fun setReplayConfig(
     call: MethodCall,
     result: Result,
@@ -631,8 +486,28 @@ class SentryFlutterPlugin :
     // Since codec block size is 16, so we have to adjust the width and height to it,
     // otherwise the codec might fail to configure on some devices, see
     // https://cs.android.com/android/platform/superproject/+/master:frameworks/base/media/java/android/media/MediaCodecInfo.java;l=1999-2001
+    val windowWidth = call.argument("windowWidth") as? Double ?: 0.0
+    val windowHeight = call.argument("windowHeight") as? Double ?: 0.0
+
     var width = call.argument("width") as? Double ?: 0.0
     var height = call.argument("height") as? Double ?: 0.0
+
+    val invalidConfig =
+      width == 0.0 ||
+        height == 0.0 ||
+        windowWidth == 0.0 ||
+        windowHeight == 0.0
+
+    if (invalidConfig) {
+      result.error(
+        "5",
+        "Replay config is not valid: width: $width, height: $height, " +
+          "windowWidth: $windowWidth, windowHeight: $windowHeight",
+        null,
+      )
+      return
+    }
+
     // First update the smaller dimension, as changing that will affect the screen ratio more.
     if (width < height) {
       val newWidth = width.adjustReplaySizeToBlockSize()
@@ -644,23 +519,12 @@ class SentryFlutterPlugin :
       height = newHeight
     }
 
-    val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-    val screenBounds =
-      if (VERSION.SDK_INT >= VERSION_CODES.R) {
-        wm.currentWindowMetrics.bounds
-      } else {
-        val screenBounds = Point()
-        @Suppress("DEPRECATION")
-        wm.defaultDisplay.getRealSize(screenBounds)
-        Rect(0, 0, screenBounds.x, screenBounds.y)
-      }
-
-    replayConfig =
+    val replayConfig =
       ScreenshotRecorderConfig(
         recordingWidth = width.roundToInt(),
         recordingHeight = height.roundToInt(),
-        scaleFactorX = width.toFloat() / screenBounds.width().toFloat(),
-        scaleFactorY = height.toFloat() / screenBounds.height().toFloat(),
+        scaleFactorX = width.toFloat() / windowWidth.toFloat(),
+        scaleFactorY = height.toFloat() / windowHeight.toFloat(),
         frameRate = call.argument("frameRate") as? Int ?: 0,
         bitRate = call.argument("bitRate") as? Int ?: 0,
       )
@@ -673,19 +537,14 @@ class SentryFlutterPlugin :
         replayConfig.bitRate,
       ),
     )
-    replay.onConfigurationChanged(Configuration())
+    replay?.onConfigurationChanged(replayConfig)
     result.success("")
   }
 
   private fun captureReplay(
-    isCrash: Boolean?,
     result: Result,
   ) {
-    if (isCrash == null) {
-      result.error("5", "Arguments are null", null)
-      return
-    }
-    replay.captureReplay(isCrash)
-    result.success(replay.getReplayId().toString())
+    replay!!.captureReplay(isTerminating = false)
+    result.success(replay!!.getReplayId().toString())
   }
 }

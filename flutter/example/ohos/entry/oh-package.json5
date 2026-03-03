@@ -1,4 +1,3 @@
-
 {
   "name": "entry",
   "version": "1.0.0",
@@ -10,6 +9,5 @@
     "@ohos/sentry_native": "file:../../../ohos/src/lib/sentry_native.har",
     "libentry.so": "file:./src/main/cpp/types/libentry",
     "sentry_ohos": "file:../../../ohos/src/lib/sentry_ohos"
-  },
+  }
 }
-

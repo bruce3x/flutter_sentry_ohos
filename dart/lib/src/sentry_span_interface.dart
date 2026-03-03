@@ -1,6 +1,6 @@
 import 'package:meta/meta.dart';
 
-import 'metrics/local_metrics_aggregator.dart';
+import 'hint.dart';
 import 'protocol.dart';
 import 'tracing.dart';
 
@@ -26,7 +26,11 @@ abstract class ISentrySpan {
   void removeData(String key);
 
   /// Sets span timestamp marking this span as finished.
-  Future<void> finish({SpanStatus? status, DateTime? endTimestamp}) async {}
+  Future<void> finish({
+    SpanStatus? status,
+    DateTime? endTimestamp,
+    Hint? hint,
+  }) async {}
 
   /// Gets span status.
   SpanStatus? get status;
@@ -46,9 +50,6 @@ abstract class ISentrySpan {
   ///
   /// See https://develop.sentry.dev/sdk/performance/trace-origin
   set origin(String? origin);
-
-  @internal
-  LocalMetricsAggregator? get localMetricsAggregator;
 
   /// Returns the end timestamp if finished
   DateTime? get endTimestamp;

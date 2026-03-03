@@ -411,6 +411,18 @@ void main() {
     expect(0, fixture.mockScopeObserver.numberOfSetContextsCalls);
   });
 
+  test('clone shares propagation context to maintain trace continuity', () {
+    final sut = fixture.getSut();
+
+    // Clone the scope
+    final clone = sut.clone();
+
+    // Verify the propagation context is shared (same instance)
+    expect(identical(sut.propagationContext, clone.propagationContext), true,
+        reason: 'Propagation context should be the same instance');
+    expect(clone.propagationContext.traceId, sut.propagationContext.traceId);
+  });
+
   group('Scope apply', () {
     final scopeUser = SentryUser(
       id: '800',
@@ -437,6 +449,11 @@ void main() {
       await scope.setTag('build', '579');
       await scope.setExtra('company-name', 'Dart Inc');
       await scope.setContexts('theme', 'material');
+      await scope.setContexts(
+          SentryFeatureFlags.type,
+          SentryFeatureFlags(
+            values: [SentryFeatureFlag(flag: 'foo', result: true)],
+          ));
       await scope.setUser(scopeUser);
 
       final updatedEvent = await scope.applyToEvent(event, Hint());
@@ -451,15 +468,41 @@ void main() {
       expect(
           updatedEvent?.extra, {'e-infos': 'abc', 'company-name': 'Dart Inc'});
       expect(updatedEvent?.contexts['theme'], {'value': 'material'});
+      expect(updatedEvent?.contexts[SentryFeatureFlags.type]?.values.first.flag,
+          'foo');
+      expect(
+          updatedEvent?.contexts[SentryFeatureFlags.type]?.values.first.result,
+          true);
     });
 
-    test('apply trace context to event', () async {
+    test('apply trace context to event with active span', () async {
       final event = SentryEvent();
       final scope = Scope(defaultTestOptions())..span = fixture.sentryTracer;
 
       final updatedEvent = await scope.applyToEvent(event, Hint());
 
-      expect(updatedEvent?.contexts['trace'] is SentryTraceContext, true);
+      expect(updatedEvent?.contexts['trace'] is SentryTraceContext, isTrue);
+    });
+
+    test('apply trace context to event with propagation context', () async {
+      final event = SentryEvent();
+      final event2 = SentryEvent();
+      final scope = Scope(defaultTestOptions());
+
+      final updatedEvent = await scope.applyToEvent(event, Hint());
+
+      final traceContext =
+          updatedEvent?.contexts['trace'] as SentryTraceContext;
+      final spanId1 = traceContext.spanId;
+      expect(traceContext.traceId, scope.propagationContext.traceId);
+
+      final updatedEvent2 = await scope.applyToEvent(event2, Hint());
+      final traceContext2 =
+          updatedEvent2?.contexts['trace'] as SentryTraceContext;
+      final spanId2 = traceContext2.spanId;
+
+      // trace contexts from the scope should always re-generate span ids
+      expect(spanId1, isNot(spanId2));
     });
 
     test('should not apply the scope properties when event already has it ',
@@ -595,6 +638,40 @@ void main() {
 
       expect(updatedEvent?.transaction, 'name');
     });
+
+    test('should not apply breadcrumbs if feedback event', () async {
+      final feedback = SentryFeedback(
+        message: 'fixture-message',
+      );
+      final feedbackEvent = SentryEvent(
+        type: 'feedback',
+        contexts: Contexts(feedback: feedback),
+        level: SentryLevel.info,
+      );
+      final scope = Scope(defaultTestOptions());
+      await scope.addBreadcrumb(Breadcrumb(message: 'fixture-breadcrumb'));
+
+      final updatedEvent = await scope.applyToEvent(feedbackEvent, Hint());
+
+      expect(updatedEvent?.breadcrumbs, isNull);
+    });
+
+    test('should not apply extras if feedback event', () async {
+      final feedback = SentryFeedback(
+        message: 'fixture-message',
+      );
+      final feedbackEvent = SentryEvent(
+        type: 'feedback',
+        contexts: Contexts(feedback: feedback),
+        level: SentryLevel.info,
+      );
+      final scope = Scope(defaultTestOptions());
+      await scope.setExtra('fixture-extra-key', 'fixture-extra-value');
+
+      final updatedEvent = await scope.applyToEvent(feedbackEvent, Hint());
+
+      expect(updatedEvent?.extra, isNull);
+    });
   });
 
   test('event processor drops the event', () async {
@@ -650,7 +727,8 @@ void main() {
         Breadcrumb? breadcrumb,
         Hint hint,
       ) {
-        return breadcrumb?.copyWith(message: "modified");
+        breadcrumb?.message = "modified";
+        return breadcrumb;
       },
     );
     await sut.addBreadcrumb(Breadcrumb());
@@ -799,7 +877,7 @@ class Fixture {
     options.maxBreadcrumbs = maxBreadcrumbs;
     options.beforeBreadcrumb = beforeBreadcrumbCallback;
     options.debug = debug;
-    options.logger = mockLogger;
+    options.log = mockLogger;
 
     if (scopeObserver != null) {
       options.addScopeObserver(scopeObserver);
@@ -813,8 +891,10 @@ class Fixture {
       null;
 
   Breadcrumb? beforeBreadcrumbMutateCallback(
-          Breadcrumb? breadcrumb, Hint hint) =>
-      breadcrumb?.copyWith(message: 'new message');
+      Breadcrumb? breadcrumb, Hint hint) {
+    breadcrumb?.message = 'new message';
+    return breadcrumb;
+  }
 
   void mockLogger(
     SentryLevel level,

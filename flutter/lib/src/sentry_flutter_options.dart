@@ -1,27 +1,25 @@
 import 'dart:async';
 
-import 'package:file/file.dart';
-import 'package:file/local.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:meta/meta.dart' as meta;
 import 'package:sentry/sentry.dart';
-import 'package:flutter/widgets.dart';
 
 import 'binding_wrapper.dart';
+import 'event_processor/screenshot_event_processor.dart';
 import 'navigation/time_to_display_tracker.dart';
 import 'renderer/renderer.dart';
 import 'screenshot/sentry_screenshot_quality.dart';
-import 'event_processor/screenshot_event_processor.dart';
-import 'sentry_flutter.dart';
 import 'sentry_privacy_options.dart';
 import 'sentry_replay_options.dart';
 import 'user_interaction/sentry_user_interaction_widget.dart';
+import 'feedback/sentry_feedback_options.dart';
 
 /// This class adds options which are only available in a Flutter environment.
 /// Note that some of these options require native Sentry integration, which is
 /// not available on all platforms.
 class SentryFlutterOptions extends SentryOptions {
-  SentryFlutterOptions({super.dsn, super.checker}) {
+  SentryFlutterOptions({super.dsn, super.platform, super.checker}) {
     enableBreadcrumbTrackingForCurrentPlatform();
   }
 
@@ -36,7 +34,9 @@ class SentryFlutterOptions extends SentryOptions {
   /// Enable or disable reporting of used packages.
   bool reportPackages = true;
 
-  /// Enable or disable the Auto session tracking on the Native SDKs (Android/iOS)
+  /// Enable or disable the Auto session tracking on the Native SDKs (Android/iOS) and Web.
+  ///
+  /// Note: On web platforms, this requires using [SentryNavigatorObserver] to function properly.
   bool enableAutoSessionTracking = true;
 
   /// Enable or disable the Crash handling on the Native SDKs, e.g.,
@@ -65,11 +65,13 @@ class SentryFlutterOptions extends SentryOptions {
   }
 
   /// Enable or disable ANR (Application Not Responding).
-  /// Available only for Android.
-  /// Disabled by default as the stack trace most of the time is hanging on
-  /// the MessageChannel from Flutter, but you can enable it if you have
-  /// Java/Kotlin code as well.
-  bool anrEnabled = false;
+  /// Available only for Android. Enabled by default.
+  bool anrEnabled = true;
+
+  /// Whether to report ANR events in debug mode.
+  /// Defaults to `false` (aligned with Android: ANR events are not reported in debug by default).
+  /// Set to `true` if you want to test ANR detection in debug mode.
+  bool anrReportInDebug = false;
 
   Duration _anrTimeoutInterval = Duration(milliseconds: 5000);
 
@@ -175,12 +177,6 @@ class SentryFlutterOptions extends SentryOptions {
   /// Enable auto performance tracking by default.
   bool enableAutoPerformanceTracing = true;
 
-  /// Automatically track app start measurement and send it with the
-  /// first transaction. Set to false when configuring option to disable or if
-  /// you want to set the end time of app startup manually using
-  /// [SentryFlutter.setAppStartEnd].
-  bool autoAppStart = true;
-
   /// Automatically attaches a screenshot when capturing an error or exception.
   ///
   /// Requires adding the [SentryWidget] to the widget tree.
@@ -191,14 +187,6 @@ class SentryFlutterOptions extends SentryOptions {
 
   /// The quality of the attached screenshot
   SentryScreenshotQuality screenshotQuality = SentryScreenshotQuality.high;
-
-  /// Only attach a screenshot when the app is resumed.
-  /// See https://docs.sentry.io/platforms/flutter/troubleshooting/#screenshot-integration-background-crash
-  bool attachScreenshotOnlyWhenResumed = false;
-
-  @Deprecated(
-      'Will be removed in a future version. Use [beforeCaptureScreenshot] instead')
-  BeforeScreenshotCallback? beforeScreenshot;
 
   /// Sets a callback which is executed before capturing screenshots. Only
   /// relevant if `attachScreenshot` is set to true. When false is returned
@@ -237,14 +225,23 @@ class SentryFlutterOptions extends SentryOptions {
   late RendererWrapper rendererWrapper = RendererWrapper();
 
   @meta.internal
+  bool isMultiViewApp = false;
+
+  @meta.internal
   late MethodChannel methodChannel = const MethodChannel('sentry_flutter');
 
   /// Enables the View Hierarchy feature.
   ///
-  /// Renders an ASCII represention of the entire view hierarchy of the
+  /// Renders an ASCII representation of the entire view hierarchy of the
   /// application when an error happens and includes it as an attachment.
   @meta.experimental
   bool attachViewHierarchy = false;
+
+  /// Sets a callback which is executed before capturing view hierarchy. Only
+  /// relevant if `attachViewHierarchy` is set to true. When false is returned
+  /// from the function, no view hierarchy will be attached.
+  @meta.experimental
+  BeforeCaptureCallback? beforeCaptureViewHierarchy;
 
   /// Enables collection of view hierarchy element identifiers.
   ///
@@ -292,6 +289,13 @@ class SentryFlutterOptions extends SentryOptions {
   /// you must use `SentryWidgetsFlutterBinding.ensureInitialized()` instead.
   bool enableFramesTracking = true;
 
+  /// Replay recording configuration.
+  final replay = SentryReplayOptions();
+
+  /// Privacy configuration for masking sensitive data in screenshots and Session Replay.
+  /// Screen content masking is enabled by default.
+  final privacy = SentryPrivacyOptions();
+
   /// By using this, you are disabling native [Breadcrumb] tracking and instead
   /// you are just tracking [Breadcrumb]s which result from events available
   /// in the current Flutter environment.
@@ -332,7 +336,7 @@ class SentryFlutterOptions extends SentryOptions {
   /// available in the Flutter environment. This way you get more detailed
   /// information where available.
   void enableBreadcrumbTrackingForCurrentPlatform() {
-    if (platformChecker.hasNativeIntegration) {
+    if (platform.supportsNativeIntegration) {
       useNativeBreadcrumbTracking();
     } else {
       useFlutterBreadcrumbTracking();
@@ -377,54 +381,22 @@ class SentryFlutterOptions extends SentryOptions {
   // ignore: invalid_use_of_internal_member
   set automatedTestMode(bool value) => super.automatedTestMode = value;
 
+  /// If app lifecycle trace generation is enabled, this sets the duration the app must
+  /// be in the background before a new trace id is generated upon resuming.
+  ///
+  /// Defaults to 30 seconds.
   @meta.internal
-  FileSystem fileSystem = LocalFileSystem();
+  Duration appInBackgroundTracingThreshold = Duration(seconds: 30);
 
-  /// Configuration of experimental features that may change or be removed
-  /// without prior notice. Additionally, these features may not be ready for
-  /// production use yet.
-  @meta.experimental
-  final experimental = _SentryFlutterExperimentalOptions();
-}
+  final _feedback = SentryFeedbackOptions();
 
-class _SentryFlutterExperimentalOptions {
-  /// Replay recording configuration.
-  final replay = SentryReplayOptions();
-
-  /// Privacy configuration for masking sensitive data in screenshots and Session Replay.
-  /// Screen content masking is:
-  /// - enabled by default for SessionReplay
-  /// - disabled by default for screenshots captured with events.
-  /// In order to mask screenshots captured with events, access or change
-  /// this property in your application: `options.experimental.privacy`.
-  /// Doing so will indicate that you want to configure privacy settings and
-  /// will enable screenshot masking alongside the default replay masking.
-  /// Note: this will change in a future SDK major release to enable screenshot
-  /// masking by default for all captures.
-  SentryPrivacyOptions get privacy {
-    // If the user explicitly sets the privacy setting, we use that.
-    // Otherwise, we use the default settings, which is no masking for screenshots
-    // and full masking for session replay.
-    // This property must only by accessed by user code otherwise it defeats the purpose.
-    _privacy ??= SentryPrivacyOptions();
-    return _privacy!;
+  /// Options for the [SentryFeedbackWidget]
+  SentryFeedbackOptions get feedback {
+    // Added so we can track usage of the widget. This will only add the integration once, even if called multiple times.
+    sdk.addIntegration('MobileFeedbackWidget');
+    return _feedback;
   }
-
-  /// TODO: remove when default masking value are synced with SS & SR in the next major release
-  SentryPrivacyOptions? _privacy;
-
-  @meta.internal
-  SentryPrivacyOptions? get privacyForScreenshots => _privacy;
-
-  @meta.internal
-  SentryPrivacyOptions get privacyForReplay =>
-      _privacy ?? SentryPrivacyOptions();
 }
-
-@Deprecated(
-    'Will be removed in a future version. Use [BeforeCaptureCallback] instead')
-typedef BeforeScreenshotCallback = FutureOr<bool> Function(SentryEvent event,
-    {Hint? hint});
 
 /// A callback which can be used to suppress capturing of screenshots.
 /// It's called in [ScreenshotEventProcessor] if screenshots are enabled.

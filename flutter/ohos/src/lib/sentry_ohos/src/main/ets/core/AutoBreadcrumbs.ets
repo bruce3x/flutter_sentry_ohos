@@ -188,3 +188,5 @@ export class AutoBreadcrumbs {
     this.store.add(bc);
   }
 }
+
+

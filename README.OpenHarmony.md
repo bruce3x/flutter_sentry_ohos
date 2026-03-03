@@ -87,13 +87,15 @@ For a more detailed example, see [example](example/lib/main.dart)
 Tested and verified on the following versions:
 
 1. Flutter: 3.27.5-ohos-1.0.1; SDK: 5.0.0(12); IDE: DevEco Studio: 5.1.0.828; ROM: 5.1.0.130 SP8;
+2. Flutter: 3.35.8-ohos-0.0.2; SDK: 5.0.0(12); IDE: DevEco Studio: 5.1.0.828; ROM: 5.1.0.130 SP8;
 
 ### 2.2 OpenHarmony Platform Limitations
 
 Due to the architectural differences of the ohos system, the current implementation provides the basic event reporting functionality of sentry-dart.
 
 - **NDK Crash Capture**: Relies on sentry-native OpenHarmony adaptation; native crashes can be captured but symbolication is not yet supported.
-- **Session Replay**: Session replay is available but limited to in-app view capture due to system permissions; system-level screenshots are not supported.
+- **Screenshot Attachment (attachScreenshot)**: Not supported. The screenshot operation executes synchronously on the UI thread, causing ANR on OHOS due to excessive duration.
+- **Session Replay**: Not supported. The OHOS native screenshot API blocks the main thread synchronously, causing ANR.
 - **HTTP Client**: Sentry SDK uses ArkTS native HTTP module; automatic interception of third-party network library requests is not supported.
 - **File Cache**: Offline event cache uses app sandbox directory and is subject to system storage quota limits.
 - **Battery Status Monitoring**: Some fields like battery temperature depend on system API support and may return default values.
@@ -154,7 +156,7 @@ The following are features supported by the OpenHarmony native SDK:
 
 | Name                       | Description                                                                | Default                                                          | ohos Support |
 | -------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------ |
-| App Responsiveness Monitor | Detect unresponsive application events                                     | Enabled, threshold 5000ms                                        | yes          |
+| ANR Detection              | Detect Application Not Responding events                                   | Enabled, threshold 5000ms                                        | yes          |
 | Frames Tracking            | Detect slow and frozen frames                                              | Enabled, slow frame threshold 48ms, frozen frame threshold 700ms | yes          |
 | Auto Breadcrumbs           | Automatically record network status, battery status, app lifecycle changes | Enabled                                                          | yes          |
 | UI Interaction Breadcrumbs | Automatically record user interactions like clicks                         | Enabled                                                          | yes          |
@@ -162,7 +164,8 @@ The following are features supported by the OpenHarmony native SDK:
 | Activity Lifecycle Tracing | Automatically trace Ability lifecycle performance                          | Enabled                                                          | yes          |
 | HTTP Request Breadcrumbs   | Automatically record HTTP requests as breadcrumbs                          | Enabled                                                          | yes          |
 | HTTP Request Tracing       | HTTP request performance tracing                                           | Disabled (can be enabled via config)                             | yes          |
-| Session Replay             | Session recording and playback                                             | Supported                                                        | yes          |
+| Screenshot Attachment      | Attach a screenshot when an event occurs                                   | Disabled (ANR: toImage blocks main thread)                       | no           |
+| Session Replay             | Session recording and playback                                             | Disabled (ANR: window.snapshot blocks main thread)               | no           |
 | Global Error Capture       | Automatically capture unhandled exceptions and Promise rejections          | Enabled                                                          | yes          |
 
 ## 4. Outstanding Issues

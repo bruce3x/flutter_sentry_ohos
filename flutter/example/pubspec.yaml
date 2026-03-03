@@ -1,12 +1,12 @@
 name: sentry_flutter_example
 description: Demonstrates how to use the sentry_flutter plugin.
-version: 8.12.0
+version: 9.6.0
 
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 environment:
-  sdk: '>=2.17.0 <4.0.0'
-  flutter: '>=3.0.0'
+  sdk: '>=3.5.0 <4.0.0'
+  flutter: '>=3.24.0'
 
 dependencies:
   flutter:
@@ -32,7 +32,6 @@ dependencies:
   logging: any # This gets constrained by `sentry_logging`
   drift: any # This gets constrained by `sentry_drift`
   isar: any # This gets constrained by `sentry_isar`
-#  package_info_plus: ^4.0.0
   package_info_plus:
     git:
       url: https://gitcode.com/openharmony-sig/flutter_plus_plugins.git
@@ -50,12 +49,7 @@ dependencies:
 
 dev_dependencies:
   flutter_lints: ^2.0.0
-  sentry_dart_plugin: ^2.2.0
-  integration_test:
-    sdk: flutter
-  flutter_test:
-    sdk: flutter
-  test: ^1.21.1
+  sentry_dart_plugin: ^3.0.0
   build_runner: any
   isar_generator:
     git:

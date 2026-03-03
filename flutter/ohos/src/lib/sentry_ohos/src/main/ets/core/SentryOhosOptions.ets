@@ -91,27 +91,24 @@ export class SentryOhosOptions extends SentryOptions {
     this.anrReportInDebug = false;
     this.autoCommitTransactions = true;
     this.commitTimeoutMs = 10000;
-    // 严格回退：默认关闭 OHOS 扩展能力
-    this.enableHiAppWatcher = false;
+    this.enableHiAppWatcher = true;
     this.maxAttachmentBytes = 524288;
     this.freezeBreadcrumbsMaxKeys = 8;
     this.crashSampleRate = 1.0;
     this.freezeSampleRate = 1.0;
-    this.enableUserInteractionIntegration = false;
+    this.enableUserInteractionIntegration = true;
     this.enableUiBreadcrumbs = true;
     this.enableAppLifecycleBreadcrumbs = true;
     this.enableFramesTracking = true;
     this.slowFrameThresholdMs = 48;
     this.frozenFrameThresholdMs = 700;
     this.framesSampleRate = 1.0;
-    this.enableActivityLifecycleTracing = false;
+    this.enableActivityLifecycleTracing = true;
     this.lifecycleTracingTimeoutMs = 10000;
     this.enableNetworkBreadcrumbs = true;
-    this.enableBatteryBreadcrumbs = false;
+    this.enableBatteryBreadcrumbs = true;
     this.enableHttpBreadcrumbs = true;
     this.enableHttpTracing = false;
-    this.enableViewHierarchy = false;
-    this.includeViewText = false;
   }
 }
 

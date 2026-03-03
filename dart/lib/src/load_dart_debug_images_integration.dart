@@ -2,21 +2,36 @@ import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
 
-import '../sentry.dart';
+import 'event_processor.dart';
+import 'hint.dart';
+import 'hub.dart';
+import 'integration.dart';
+import 'protocol/debug_image.dart';
+import 'protocol/debug_meta.dart';
+import 'protocol/sentry_event.dart';
+import 'protocol/sentry_level.dart';
+import 'protocol/sentry_stack_trace.dart';
+import 'sentry_options.dart';
 
 class LoadDartDebugImagesIntegration extends Integration<SentryOptions> {
+  static const integrationName = 'LoadDartDebugImages';
+
   @override
   void call(Hub hub, SentryOptions options) {
-    if (options.enableDartSymbolication) {
-      options.addEventProcessor(LoadImageIntegrationEventProcessor(options));
-      options.sdk.addIntegration('loadDartImageIntegration');
+    if (options.enableDartSymbolication &&
+        (options.runtimeChecker.isAppObfuscated() ||
+            options.runtimeChecker.isSplitDebugInfoBuild()) &&
+        !options.platform.isWeb) {
+      options.addEventProcessor(
+          LoadDartDebugImagesIntegrationEventProcessor(options));
+      options.sdk.addIntegration(integrationName);
     }
   }
 }
 
 @internal
-class LoadImageIntegrationEventProcessor implements EventProcessor {
-  LoadImageIntegrationEventProcessor(this._options);
+class LoadDartDebugImagesIntegrationEventProcessor implements EventProcessor {
+  LoadDartDebugImagesIntegrationEventProcessor(this._options);
 
   final SentryOptions _options;
 
@@ -29,15 +44,11 @@ class LoadImageIntegrationEventProcessor implements EventProcessor {
     if (stackTrace != null) {
       final debugImage = getAppDebugImage(stackTrace);
       if (debugImage != null) {
-        late final DebugMeta debugMeta;
         if (event.debugMeta != null) {
-          final images = List<DebugImage>.from(event.debugMeta!.images);
-          images.add(debugImage);
-          debugMeta = event.debugMeta!.copyWith(images: images);
+          event.debugMeta?.addDebugImage(debugImage);
         } else {
-          debugMeta = DebugMeta(images: [debugImage]);
+          event.debugMeta = DebugMeta(images: [debugImage]);
         }
-        return event.copyWith(debugMeta: debugMeta);
       }
     }
 
@@ -54,7 +65,7 @@ class LoadImageIntegrationEventProcessor implements EventProcessor {
     try {
       _debugImage ??= createDebugImage(stackTrace);
     } catch (e, stack) {
-      _options.logger(
+      _options.log(
         SentryLevel.info,
         "Couldn't add Dart debug image to event. The event will still be reported.",
         exception: e,
@@ -70,7 +81,7 @@ class LoadImageIntegrationEventProcessor implements EventProcessor {
   @visibleForTesting
   DebugImage? createDebugImage(SentryStackTrace stackTrace) {
     if (stackTrace.buildId == null || stackTrace.baseAddr == null) {
-      _options.logger(SentryLevel.warning,
+      _options.log(SentryLevel.warning,
           'Cannot create DebugImage without a build ID and image base address.');
       return null;
     }
@@ -83,11 +94,11 @@ class LoadImageIntegrationEventProcessor implements EventProcessor {
     // It doesn't need to exist and is not used for symbolication.
     late final String codeFile;
 
-    final platform = _options.platformChecker.platform;
+    final platform = _options.platform;
 
     if (platform.isAndroid || platform.isWindows) {
       type = 'elf';
-      debugId = _convertBuildIdToDebugId(stackTrace.buildId!, platform.endian);
+      debugId = _convertBuildIdToDebugId(stackTrace.buildId!, Endian.host);
       if (platform.isAndroid) {
         codeFile = 'libapp.so';
       } else if (platform.isWindows) {
@@ -98,7 +109,7 @@ class LoadImageIntegrationEventProcessor implements EventProcessor {
       debugId = _formatHexToUuid(stackTrace.buildId!);
       codeFile = 'App.Framework/App';
     } else {
-      _options.logger(
+      _options.log(
         SentryLevel.warning,
         'Unsupported platform for creating Dart debug images.',
       );

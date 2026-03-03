@@ -1,7 +1,8 @@
 @TestOn('vm')
-library flutter_test;
+library;
 
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:sentry_flutter/src/native/sentry_native_channel.dart';
@@ -42,13 +43,16 @@ void main() {
       'attachThreads': false,
       'autoSessionTrackingIntervalMillis': 30000,
       'dist': null,
-      'integrations': <String>[],
-      'packages': [
-        {'name': 'pub:sentry_flutter', 'version': sdkVersion}
-      ],
-      'diagnosticLevel': 'debug',
+      'sdk': {
+        'name': 'sentry.dart.flutter',
+        'version': sdkVersion,
+        'packages': [
+          {'name': 'pub:sentry_flutter', 'version': sdkVersion}
+        ]
+      },
+      'diagnosticLevel': 'warning',
       'maxBreadcrumbs': 100,
-      'anrEnabled': false,
+      'anrEnabled': true,
       'anrTimeoutIntervalMillis': 5000,
       'enableAutoNativeBreadcrumbs': true,
       'maxCacheItems': 30,
@@ -66,8 +70,14 @@ void main() {
       'readTimeoutMillis': 5000,
       'appHangTimeoutIntervalMillis': 2000,
       'replay': <String, dynamic>{
+        'quality': 'medium',
         'sessionSampleRate': null,
         'onErrorSampleRate': null,
+        'tags': {
+          'maskAllText': true,
+          'maskAllImages': true,
+          'maskAssetImages': false,
+        }
       },
       'enableSpotlight': false,
       'spotlightUrl': null,
@@ -119,8 +129,10 @@ void main() {
         user: 'admin',
         pass: '0000',
       )
-      ..experimental.replay.sessionSampleRate = 0.1
-      ..experimental.replay.onErrorSampleRate = 0.2
+      ..replay.quality = SentryReplayQuality.high
+      ..replay.sessionSampleRate = 0.1
+      ..replay.onErrorSampleRate = 0.2
+      ..privacy.mask<Image>()
       ..spotlight =
           Spotlight(enabled: true, url: 'http://localhost:8969/stream');
 
@@ -143,11 +155,15 @@ void main() {
       'attachThreads': true,
       'autoSessionTrackingIntervalMillis': 240000,
       'dist': 'distfoo',
-      'integrations': ['foo'],
-      'packages': [
-        {'name': 'pub:sentry_flutter', 'version': sdkVersion},
-        {'name': 'bar', 'version': '1'},
-      ],
+      'sdk': {
+        'name': 'sentry.dart.flutter',
+        'version': sdkVersion,
+        'packages': [
+          {'name': 'pub:sentry_flutter', 'version': sdkVersion},
+          {'name': 'bar', 'version': '1'},
+        ],
+        'integrations': ['foo'],
+      },
       'diagnosticLevel': 'error',
       'maxBreadcrumbs': 0,
       'anrEnabled': false,
@@ -175,8 +191,15 @@ void main() {
         'pass': '0000',
       },
       'replay': <String, dynamic>{
+        'quality': 'high',
         'sessionSampleRate': 0.1,
         'onErrorSampleRate': 0.2,
+        'tags': {
+          'maskAllText': true,
+          'maskAllImages': true,
+          'maskAssetImages': false,
+          'maskingRules': ['Image: mask']
+        }
       },
       'enableSpotlight': true,
       'spotlightUrl': 'http://localhost:8969/stream',
@@ -194,8 +217,7 @@ MethodChannel createChannelWithCallback(
 }
 
 SentryFlutterOptions createOptions() {
-  final mockPlatformChecker = MockPlatformChecker(hasNativeIntegration: true);
-  final options = defaultTestOptions(mockPlatformChecker);
+  final options = defaultTestOptions();
   options.sdk = SdkVersion(
     name: sdkName,
     version: sdkVersion,

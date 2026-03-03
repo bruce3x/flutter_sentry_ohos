@@ -17,16 +17,6 @@ dependency_overrides:
     path: ../../drift
   sentry_isar:
     path: ../../isar
-  # isar community fork is more stable
-#  isar:
-#    version: ^3.1.0
-#    hosted: https://pub.isar-community.dev/
-#  isar_flutter_libs:
-#    version: ^3.1.0
-#    hosted: https://pub.isar-community.dev/
-#  isar_generator:
-#    version: ^3.1.0
-#    hosted: https://pub.isar-community.dev/
   universal_platform:
     git:
       url: "https://gitcode.com/OpenHarmony-Flutter/fluttertpc_universal_platform.git"
@@ -35,17 +25,14 @@ dependency_overrides:
     git:
       url: "https://gitcode.com/Wangzhipeng520/isar.git"
       path: "packages/isar"
-  #    version: ^3.1.0
-  #    hosted: https://pub.isar-community.dev/
+
   isar_flutter_libs:
     git:
       url: "https://gitcode.com/Wangzhipeng520/isar.git"
       path: "packages/isar_flutter_libs"
-  #    version: ^3.1.0
-  #    hosted: https://pub.isar-community.dev/
+
   isar_generator:
     git:
       url: "https://gitcode.com/Wangzhipeng520/isar.git"
       path: "packages/isar_generator"
-#    version: ^3.1.0
-#    hosted: https://pub.isar-community.dev/
+

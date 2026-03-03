@@ -1,5 +1,5 @@
 import 'package:sentry/sentry.dart';
-import 'package:sentry/src/diagnostic_logger.dart';
+import 'package:sentry/src/diagnostic_log.dart';
 import 'package:test/test.dart';
 
 import 'test_utils.dart';
@@ -11,37 +11,39 @@ void main() {
     fixture = Fixture();
   });
 
-  test('$DiagnosticLogger do not log if debug is disabled', () {
-    fixture.options.debug = false;
+  group(DiagnosticLog, () {
+    test('does not log if debug is disabled', () {
+      fixture.options.debug = false;
 
-    fixture.getSut().log(SentryLevel.error, 'foobar');
+      fixture.getSut().log(SentryLevel.error, 'foobar');
 
-    expect(fixture.loggedMessage, isNull);
-  });
+      expect(fixture.loggedMessage, isNull);
+    });
 
-  test('$DiagnosticLogger log if debug is enabled', () {
-    fixture.options.debug = true;
+    test('logs if debug is enabled', () {
+      fixture.options.debug = true;
 
-    fixture.getSut().log(SentryLevel.error, 'foobar');
+      fixture.getSut().log(SentryLevel.error, 'foobar');
 
-    expect(fixture.loggedMessage, 'foobar');
-  });
+      expect(fixture.loggedMessage, 'foobar');
+    });
 
-  test('$DiagnosticLogger do not log if level is too low', () {
-    fixture.options.debug = true;
-    fixture.options.diagnosticLevel = SentryLevel.error;
+    test('does not log if level is too low', () {
+      fixture.options.debug = true;
+      fixture.options.diagnosticLevel = SentryLevel.error;
 
-    fixture.getSut().log(SentryLevel.warning, 'foobar');
+      fixture.getSut().log(SentryLevel.warning, 'foobar');
 
-    expect(fixture.loggedMessage, isNull);
-  });
+      expect(fixture.loggedMessage, isNull);
+    });
 
-  test('$DiagnosticLogger always log fatal', () {
-    fixture.options.debug = false;
+    test('always logs fatal', () {
+      fixture.options.debug = false;
 
-    fixture.getSut().log(SentryLevel.fatal, 'foobar');
+      fixture.getSut().log(SentryLevel.fatal, 'foobar');
 
-    expect(fixture.loggedMessage, 'foobar');
+      expect(fixture.loggedMessage, 'foobar');
+    });
   });
 }
 
@@ -50,8 +52,8 @@ class Fixture {
 
   Object? loggedMessage;
 
-  DiagnosticLogger getSut() {
-    return DiagnosticLogger(mockLogger, options);
+  DiagnosticLog getSut() {
+    return DiagnosticLog(mockLogger, options);
   }
 
   void mockLogger(

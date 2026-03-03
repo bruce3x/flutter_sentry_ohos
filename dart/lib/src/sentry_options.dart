@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:developer';
 
 import 'package:http/http.dart';
 import 'package:meta/meta.dart';
@@ -7,21 +6,25 @@ import 'package:meta/meta.dart';
 import '../sentry.dart';
 import 'client_reports/client_report_recorder.dart';
 import 'client_reports/noop_client_report_recorder.dart';
-import 'diagnostic_logger.dart';
+import 'diagnostic_log.dart';
 import 'environment/environment_variables.dart';
 import 'noop_client.dart';
+import 'platform/platform.dart';
 import 'sentry_exception_factory.dart';
 import 'sentry_stack_trace_factory.dart';
 import 'transport/noop_transport.dart';
 import 'version.dart';
+import 'sentry_log_batcher.dart';
+import 'noop_log_batcher.dart';
+import 'dart:developer' as developer;
 
 // TODO: shutdownTimeout, flushTimeoutMillis
 // https://api.dart.dev/stable/2.10.2/dart-io/HttpClient/close.html doesn't have a timeout param, we'd need to implement manually
 
 /// Sentry SDK options
 class SentryOptions {
-  /// Default Log level if not specified Default is DEBUG
-  static final SentryLevel _defaultDiagnosticLevel = SentryLevel.debug;
+  /// Default Log level if not specified Default is WARNING
+  static final SentryLevel _defaultDiagnosticLevel = SentryLevel.warning;
 
   String? _dsn;
   Dsn? _parsedDsn;
@@ -124,19 +127,19 @@ class SentryOptions {
   /// This does not change whether an event is captured.
   MaxRequestBodySize maxRequestBodySize = MaxRequestBodySize.never;
 
-  /// Configures up to which size response bodies should be included in events.
-  /// This does not change whether an event is captured.
-  MaxResponseBodySize maxResponseBodySize = MaxResponseBodySize.never;
+  SdkLogCallback _log = noOpLog;
 
-  // ignore: deprecated_member_use_from_same_package
-  SentryLogger _logger = noOpLogger;
+  /// Log callback to log useful debugging information if debug is enabled
+  SdkLogCallback get log => _log;
 
-  /// Logger interface to log useful debugging information if debug is enabled
-  SentryLogger get logger => _logger;
-
-  set logger(SentryLogger logger) {
-    _logger = DiagnosticLogger(logger, this).log;
+  @internal
+  set log(SdkLogCallback value) {
+    diagnosticLog = DiagnosticLog(value, this);
+    _log = diagnosticLog!.log;
   }
+
+  @visibleForTesting
+  DiagnosticLog? diagnosticLog;
 
   final List<EventProcessor> _eventProcessors = [];
 
@@ -154,18 +157,18 @@ class SentryOptions {
   List<Integration> get integrations => List.unmodifiable(_integrations);
 
   /// Turns debug mode on or off. If debug is enabled SDK will attempt to print out useful debugging
-  /// information if something goes wrong. Default is disabled.
+  /// information if something goes wrong. Default is enabled in debug mode, otherwise it is disabled.
   bool get debug => _debug;
 
   set debug(bool newValue) {
     _debug = newValue;
-    // ignore: deprecated_member_use_from_same_package
-    if (_debug == true && logger == noOpLogger) {
-      _logger = _debugLogger;
+    if (_debug == true &&
+        (log == noOpLog || diagnosticLog?.logger == noOpLog)) {
+      log = debugLog;
     }
-    if (_debug == false && logger == _debugLogger) {
-      // ignore: deprecated_member_use_from_same_package
-      _logger = noOpLogger;
+    if (_debug == false &&
+        (log == debugLog || diagnosticLog?.logger == debugLog)) {
+      log = noOpLog;
     }
   }
 
@@ -197,6 +200,10 @@ class SentryOptions {
   /// This function is called right before a metric is about to be emitted.
   /// Can return true to emit the metric, or false to drop it.
   BeforeMetricCallback? beforeMetricCallback;
+
+  /// This function is called right before a log is about to be sent.
+  /// Can return a modified log or null to drop the log.
+  BeforeSendLogCallback? beforeSendLog;
 
   /// Sets the release. SDK will try to automatically configure a release out of the box
   /// See [docs for further information](https://docs.sentry.io/platforms/flutter/configuration/releases/)
@@ -278,9 +285,12 @@ class SentryOptions {
   /// `debugPrint` calls are only recorded in release builds, though.
   bool enablePrintBreadcrumbs = true;
 
-  /// If [platformChecker] is provided, it is used get the environment.
-  /// This is useful in tests. Should be an implementation of [PlatformChecker].
-  PlatformChecker platformChecker = PlatformChecker();
+  /// If [runtimeChecker] is provided, it is used get the environment.
+  /// This is useful in tests. Should be an implementation of [RuntimeChecker].
+  RuntimeChecker runtimeChecker = RuntimeChecker();
+
+  /// Info on which platform the SDK runs.
+  Platform platform = Platform();
 
   /// If [environmentVariables] is provided, it is used get the environment
   /// variables. This is useful in tests.
@@ -389,7 +399,7 @@ class SentryOptions {
         _ignoredExceptionsForType.contains(exception.runtimeType);
   }
 
-  /// Enables Dart symbolication for stack traces in Flutter.
+  /// Enables Dart symbolication for stack traces in Flutter for Android and Cocoa.
   ///
   /// If true, the SDK will attempt to symbolicate Dart stack traces when
   /// [Sentry.init] is used instead of `SentryFlutter.init`. This is useful
@@ -443,55 +453,6 @@ class SentryOptions {
   void addExceptionStackTraceExtractor(ExceptionStackTraceExtractor extractor) {
     _stackTraceExtractorsByType[extractor.exceptionType] = extractor;
   }
-
-  /// Enables generation of transactions and propagation of trace data. If set
-  /// to null, tracing might be enabled if [tracesSampleRate] or [tracesSampler]
-  /// are set.
-  @Deprecated(
-      'Use either tracesSampleRate or tracesSampler instead. This will be removed in v9')
-  bool? enableTracing;
-
-  /// Enables sending developer metrics to Sentry.
-  /// More on https://develop.sentry.dev/delightful-developer-metrics/.
-  /// Example:
-  /// ```dart
-  /// Sentry.metrics.counter('myMetric');
-  /// ```
-  @experimental
-  bool enableMetrics = false;
-
-  @experimental
-  bool _enableDefaultTagsForMetrics = true;
-
-  /// Enables enriching metrics with default tags. Requires [enableMetrics].
-  /// More on https://develop.sentry.dev/delightful-developer-metrics/sending-metrics-sdk/#automatic-tags-extraction
-  /// Currently adds release, environment and transaction name.
-  @experimental
-  bool get enableDefaultTagsForMetrics =>
-      enableMetrics && _enableDefaultTagsForMetrics;
-
-  /// Enables enriching metrics with default tags. Requires [enableMetrics].
-  /// More on https://develop.sentry.dev/delightful-developer-metrics/sending-metrics-sdk/#automatic-tags-extraction
-  /// Currently adds release, environment and transaction name.
-  @experimental
-  set enableDefaultTagsForMetrics(final bool enableDefaultTagsForMetrics) =>
-      _enableDefaultTagsForMetrics = enableDefaultTagsForMetrics;
-
-  @experimental
-  bool _enableSpanLocalMetricAggregation = true;
-
-  /// Enables span metrics aggregation. Requires [enableMetrics].
-  /// More on https://develop.sentry.dev/sdk/metrics/#span-aggregation
-  @experimental
-  bool get enableSpanLocalMetricAggregation =>
-      enableMetrics && _enableSpanLocalMetricAggregation;
-
-  /// Enables span metrics aggregation. Requires [enableMetrics].
-  /// More on https://develop.sentry.dev/sdk/metrics/#span-aggregation
-  @experimental
-  set enableSpanLocalMetricAggregation(
-          final bool enableSpanLocalMetricAggregation) =>
-      _enableSpanLocalMetricAggregation = enableSpanLocalMetricAggregation;
 
   /// Only for internal use. Changed SDK behaviour when set to true:
   /// - Rethrow exceptions that occur in user provided closures
@@ -550,12 +511,37 @@ class SentryOptions {
   /// iOS only supports http proxies, while macOS also supports socks.
   SentryProxy? proxy;
 
-  SentryOptions({String? dsn, PlatformChecker? checker}) {
+  /// Whether to group exceptions hierarchically.
+  ///
+  /// If true, exceptions will be grouped hierarchically if possible.
+  ///
+  /// This is opt-in, as it can lead to existing exception beeing grouped as new ones.
+  bool groupExceptions = false;
+
+  /// Enable to capture and send logs to Sentry.
+  ///
+  /// Disabled by default.
+  bool enableLogs = false;
+
+  /// Enables adding the module in [SentryStackFrame.module].
+  /// This option only has an effect in non-obfuscated builds.
+  /// Enabling this option may change grouping.
+  bool includeModuleInStackTrace = false;
+
+  late final SentryLogger logger = SentryLogger(clock);
+
+  @internal
+  SentryLogBatcher logBatcher = NoopLogBatcher();
+
+  SentryOptions({String? dsn, Platform? platform, RuntimeChecker? checker}) {
     this.dsn = dsn;
-    if (checker != null) {
-      platformChecker = checker;
+    if (platform != null) {
+      this.platform = platform;
     }
-    sdk = SdkVersion(name: sdkName(platformChecker.isWeb), version: sdkVersion);
+    if (checker != null) {
+      runtimeChecker = checker;
+    }
+    sdk = SdkVersion(name: sdkName(this.platform.isWeb), version: sdkVersion);
     sdk.addPackage('pub:sentry', sdkVersion);
   }
 
@@ -602,11 +588,6 @@ class SentryOptions {
   /// Returns if tracing should be enabled. If tracing is disabled, starting transactions returns
   /// [NoOpSentrySpan].
   bool isTracingEnabled() {
-    // ignore: deprecated_member_use_from_same_package
-    final enable = enableTracing;
-    if (enable != null) {
-      return enable;
-    }
     return tracesSampleRate != null || tracesSampler != null;
   }
 
@@ -625,14 +606,15 @@ class SentryOptions {
   late SentryStackTraceFactory stackTraceFactory =
       SentryStackTraceFactory(this);
 
-  void _debugLogger(
+  @visibleForTesting
+  void debugLog(
     SentryLevel level,
     String message, {
     String? logger,
     Object? exception,
     StackTrace? stackTrace,
   }) {
-    log(
+    developer.log(
       '[${level.name}] $message',
       level: level.toDartLogLevel(),
       name: logger ?? 'sentry',
@@ -642,6 +624,15 @@ class SentryOptions {
     );
   }
 }
+
+@visibleForTesting
+void noOpLog(
+  SentryLevel level,
+  String message, {
+  String? logger,
+  Object? exception,
+  StackTrace? stackTrace,
+}) {}
 
 /// This function is called with an SDK specific event object and can return a modified event
 /// object or nothing to skip reporting the event
@@ -654,6 +645,7 @@ typedef BeforeSendCallback = FutureOr<SentryEvent?> Function(
 /// object or nothing to skip reporting the transaction
 typedef BeforeSendTransactionCallback = FutureOr<SentryTransaction?> Function(
   SentryTransaction transaction,
+  Hint hint,
 );
 
 /// This function is called with an SDK specific breadcrumb object before the breadcrumb is added
@@ -670,11 +662,15 @@ typedef BeforeMetricCallback = bool Function(
   Map<String, String>? tags,
 });
 
+/// This function is called right before a log is about to be sent.
+/// Can return a modified log or null to drop the log.
+typedef BeforeSendLogCallback = FutureOr<SentryLog?> Function(SentryLog log);
+
 /// Used to provide timestamp for logging.
 typedef ClockProvider = DateTime Function();
 
-/// Logger interface to log useful debugging information if debug is enabled
-typedef SentryLogger = void Function(
+/// Logger callback to log useful debugging information if debug is enabled
+typedef SdkLogCallback = void Function(
   SentryLevel level,
   String message, {
   String? logger,
@@ -684,32 +680,3 @@ typedef SentryLogger = void Function(
 
 typedef TracesSamplerCallback = double? Function(
     SentrySamplingContext samplingContext);
-
-/// A NoOp logger that does nothing
-@Deprecated('Will be removed in v8. Disable [debug] instead')
-void noOpLogger(
-  SentryLevel level,
-  String message, {
-  String? logger,
-  Object? exception,
-  StackTrace? stackTrace,
-}) {}
-
-/// A Logger that prints out the level and message
-@Deprecated('Will be removed in v8. Enable [debug] instead')
-void dartLogger(
-  SentryLevel level,
-  String message, {
-  String? logger,
-  Object? exception,
-  StackTrace? stackTrace,
-}) {
-  log(
-    '[${level.name}] $message',
-    level: level.toDartLogLevel(),
-    name: logger ?? 'sentry',
-    time: getUtcDateTime(),
-    error: exception,
-    stackTrace: stackTrace,
-  );
-}

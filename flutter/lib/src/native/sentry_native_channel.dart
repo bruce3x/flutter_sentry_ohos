@@ -8,9 +8,8 @@ import 'package:meta/meta.dart';
 
 import '../../sentry_flutter.dart';
 import '../replay/replay_config.dart';
-import 'native_app_start.dart';
-import 'native_frames.dart';
 import 'method_channel_helper.dart';
+import 'native_app_start.dart';
 import 'sentry_native_binding.dart';
 import 'sentry_native_invoker.dart';
 import 'sentry_safe_method_channel.dart';
@@ -29,6 +28,9 @@ class SentryNativeChannel
   SentryNativeChannel(this.options)
       : channel = SentrySafeMethodChannel(options);
 
+  void _logNotSupported(String operation) => options.log(
+      SentryLevel.debug, 'SentryNativeChannel: $operation is not supported');
+
   @override
   Future<void> init(Hub hub) async {
     return channel.invokeMethod('initNativeSdk', <String, dynamic>{
@@ -43,12 +45,11 @@ class SentryNativeChannel
       'autoSessionTrackingIntervalMillis':
           options.autoSessionTrackingInterval.inMilliseconds,
       'dist': options.dist,
-      'integrations': options.sdk.integrations,
-      'packages':
-          options.sdk.packages.map((e) => e.toJson()).toList(growable: false),
+      'sdk': options.sdk.toJson(),
       'diagnosticLevel': options.diagnosticLevel.name,
       'maxBreadcrumbs': options.maxBreadcrumbs,
       'anrEnabled': options.anrEnabled,
+      'anrReportInDebug': options.anrReportInDebug,
       'anrTimeoutIntervalMillis': options.anrTimeoutInterval.inMilliseconds,
       'enableAutoNativeBreadcrumbs': options.enableAutoNativeBreadcrumbs,
       'maxCacheItems': options.maxCacheItems,
@@ -69,8 +70,18 @@ class SentryNativeChannel
           options.appHangTimeoutInterval.inMilliseconds,
       if (options.proxy != null) 'proxy': options.proxy?.toJson(),
       'replay': <String, dynamic>{
-        'sessionSampleRate': options.experimental.replay.sessionSampleRate,
-        'onErrorSampleRate': options.experimental.replay.onErrorSampleRate,
+        'quality': options.replay.quality.name,
+        'sessionSampleRate': options.replay.sessionSampleRate,
+        'onErrorSampleRate': options.replay.onErrorSampleRate,
+        'tags': <String, dynamic>{
+          'maskAllText': options.privacy.maskAllText,
+          'maskAllImages': options.privacy.maskAllImages,
+          'maskAssetImages': options.privacy.maskAssetImages,
+          if (options.privacy.userMaskingRules.isNotEmpty)
+            'maskingRules': options.privacy.userMaskingRules
+                .map((rule) => '${rule.name}: ${rule.description}')
+                .toList(growable: false),
+        },
       },
       'enableSpotlight': options.spotlight.enabled,
       'spotlightUrl': options.spotlight.url,
@@ -98,6 +109,11 @@ class SentryNativeChannel
   }
 
   @override
+  FutureOr<void> captureStructuredEnvelope(SentryEnvelope envelope) {
+    throw UnsupportedError("Not supported on this platform");
+  }
+
+  @override
   bool get supportsLoadContexts => true;
 
   @override
@@ -105,30 +121,44 @@ class SentryNativeChannel
       channel.invokeMapMethod<String, dynamic>('loadContexts');
 
   @override
-  Future<void> beginNativeFrames() => channel.invokeMethod('beginNativeFrames');
-
-  @override
-  Future<NativeFrames?> endNativeFrames(SentryId id) async {
-    final json = await channel.invokeMapMethod<String, dynamic>(
-        'endNativeFrames', {'id': id.toString()});
-    return (json != null) ? NativeFrames.fromJson(json) : null;
-  }
-
-  @override
   Future<void> setUser(SentryUser? user) async {
-    final normalizedUser = user?.copyWith(
-      data: MethodChannelHelper.normalizeMap(user.data),
-    );
-    await channel.invokeMethod(
-      'setUser',
-      {'user': normalizedUser?.toJson()},
-    );
+    if (user == null) {
+      await channel.invokeMethod(
+        'setUser',
+        {'user': null},
+      );
+    } else {
+      final normalizedUser = SentryUser(
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        ipAddress: user.ipAddress,
+        data: MethodChannelHelper.normalizeMap(user.data),
+        // ignore: deprecated_member_use
+        extras: user.extras,
+        geo: user.geo,
+        name: user.name,
+        // ignore: invalid_use_of_internal_member
+        unknown: user.unknown,
+      );
+      await channel.invokeMethod(
+        'setUser',
+        {'user': normalizedUser.toJson()},
+      );
+    }
   }
 
   @override
   Future<void> addBreadcrumb(Breadcrumb breadcrumb) async {
-    final normalizedBreadcrumb = breadcrumb.copyWith(
+    final normalizedBreadcrumb = Breadcrumb(
+      message: breadcrumb.message,
+      category: breadcrumb.category,
       data: MethodChannelHelper.normalizeMap(breadcrumb.data),
+      level: breadcrumb.level,
+      type: breadcrumb.type,
+      timestamp: breadcrumb.timestamp,
+      // ignore: invalid_use_of_internal_member
+      unknown: breadcrumb.unknown,
     );
     await channel.invokeMethod(
       'addBreadcrumb',
@@ -223,15 +253,42 @@ class SentryNativeChannel
   @override
   FutureOr<void> setReplayConfig(ReplayConfig config) =>
       channel.invokeMethod('setReplayConfig', {
+        'windowWidth': config.windowWidth,
+        'windowHeight': config.windowHeight,
         'width': config.width,
         'height': config.height,
         'frameRate': config.frameRate,
-        'bitRate': config.bitRate,
       });
 
   @override
-  Future<SentryId> captureReplay(bool isCrash) =>
-      channel.invokeMethod('captureReplay', {
-        'isCrash': isCrash,
-      }).then((value) => SentryId.fromId(value as String));
+  FutureOr<void> setLastErrorEventId(SentryId eventId) =>
+      channel.invokeMethod('setLastErrorEventId', {
+        'eventId': eventId.toString(),
+      });
+
+  @override
+  Future<SentryId> captureReplay() => channel
+      .invokeMethod('captureReplay')
+      .then((value) => SentryId.fromId(value as String));
+
+  @override
+  FutureOr<void> captureSession() {
+    _logNotSupported('capturing session');
+  }
+
+  @override
+  FutureOr<void> startSession({bool ignoreDuration = false}) {
+    _logNotSupported('starting session');
+  }
+
+  @override
+  FutureOr<Map<dynamic, dynamic>?> getSession() {
+    _logNotSupported('getting session');
+    return null;
+  }
+
+  @override
+  FutureOr<void> updateSession({int? errors, String? status}) {
+    _logNotSupported('updating session');
+  }
 }

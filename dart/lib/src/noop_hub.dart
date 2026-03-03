@@ -4,36 +4,25 @@ import 'package:meta/meta.dart';
 
 import 'hint.dart';
 import 'hub.dart';
-import 'metrics/metric.dart';
-import 'metrics/metrics_aggregator.dart';
-import 'metrics/metrics_api.dart';
 import 'profiling.dart';
 import 'protocol.dart';
 import 'protocol/sentry_feedback.dart';
 import 'scope.dart';
+import 'sdk_lifecycle_hooks.dart';
 import 'sentry_client.dart';
 import 'sentry_options.dart';
-import 'sentry_user_feedback.dart';
 import 'tracing.dart';
 
 class NoOpHub implements Hub {
-  NoOpHub._() {
-    _metricsApi = MetricsApi(hub: this);
-  }
+  NoOpHub._();
 
   static final NoOpHub _instance = NoOpHub._();
 
   final _options = SentryOptions.empty();
 
-  late final MetricsApi _metricsApi;
-
   @override
   @internal
   SentryOptions get options => _options;
-
-  @override
-  @internal
-  MetricsApi get metricsApi => _metricsApi;
 
   factory NoOpHub() {
     return _instance;
@@ -56,6 +45,7 @@ class NoOpHub implements Hub {
     dynamic throwable, {
     dynamic stackTrace,
     Hint? hint,
+    SentryMessage? message,
     ScopeCallback? withScope,
   }) async =>
       SentryId.empty();
@@ -93,12 +83,9 @@ class NoOpHub implements Hub {
   Future<SentryId> captureTransaction(
     SentryTransaction transaction, {
     SentryTraceContextHeader? traceContext,
+    Hint? hint,
   }) async =>
       SentryId.empty();
-
-  @override
-  // ignore: deprecated_member_use_from_same_package
-  Future<void> captureUserFeedback(SentryUserFeedback userFeedback) async {}
 
   @override
   Future<SentryId> captureFeedback(
@@ -107,6 +94,9 @@ class NoOpHub implements Hub {
     ScopeCallback? withScope,
   }) async =>
       SentryId.empty();
+
+  @override
+  FutureOr<void> captureLog(SentryLog log) async {}
 
   @override
   ISentrySpan startTransaction(
@@ -137,6 +127,9 @@ class NoOpHub implements Hub {
       NoOpSentrySpan();
 
   @override
+  void generateNewTrace() {}
+
+  @override
   ISentrySpan? getSpan() => null;
 
   @override
@@ -154,12 +147,13 @@ class NoOpHub implements Hub {
   Scope get scope => Scope(_options);
 
   @override
-  @internal
-  Future<SentryId> captureMetrics(
-          Map<int, Iterable<Metric>> metricsBuckets) async =>
-      SentryId.empty();
+  Map<Type, List<Function>> get lifecycleCallbacks => {};
 
   @override
-  @internal
-  MetricsAggregator? get metricsAggregator => null;
+  void registerSdkLifecycleCallback<T extends SdkLifecycleEvent>(
+      SdkLifecycleCallback<T> callback) {}
+
+  @override
+  void removeSdkLifecycleCallback<T extends SdkLifecycleEvent>(
+      SdkLifecycleCallback<T> callback) {}
 }

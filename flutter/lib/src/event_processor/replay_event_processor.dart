@@ -12,11 +12,20 @@ class ReplayEventProcessor implements EventProcessor {
 
   @override
   Future<SentryEvent?> apply(SentryEvent event, Hint hint) async {
-    if (event.eventId != SentryId.empty() &&
-        event.exceptions?.isNotEmpty == true) {
-      final isCrash =
-          event.exceptions!.any((e) => e.mechanism?.handled == false);
-      final replayId = await _binding.captureReplay(isCrash);
+    final isErrorEvent = event.eventId != SentryId.empty() &&
+        event.exceptions?.isNotEmpty == true;
+    final isFeedbackEvent =
+        event.eventId != SentryId.empty() && event.type == 'feedback';
+    final isWidgetFeedbackEvent =
+        // ignore: invalid_use_of_internal_member
+        hint.get(TypeCheckHint.isWidgetFeedback) == true;
+    final shouldCaptureReplay =
+        isErrorEvent || (isFeedbackEvent && !isWidgetFeedbackEvent);
+    if (shouldCaptureReplay) {
+      if (event.eventId != SentryId.empty()) {
+        await _binding.setLastErrorEventId(event.eventId);
+      }
+      final replayId = await _binding.captureReplay();
       // If session replay is disabled, this is the first time we receive the ID.
       _hub.configureScope((scope) {
         // ignore: invalid_use_of_internal_member

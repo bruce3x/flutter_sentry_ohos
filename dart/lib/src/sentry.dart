@@ -3,30 +3,32 @@ import 'dart:async';
 import 'package:meta/meta.dart';
 
 import 'dart_exception_type_identifier.dart';
-import 'load_dart_debug_images_integration.dart';
-import 'metrics/metrics_api.dart';
-import 'protocol/sentry_feedback.dart';
-import 'run_zoned_guarded_integration.dart';
-import 'event_processor/enricher/enricher_event_processor.dart';
 import 'environment/environment_variables.dart';
 import 'event_processor/deduplication_event_processor.dart';
-import 'hint.dart';
+import 'event_processor/enricher/enricher_event_processor.dart';
 import 'event_processor/exception/exception_event_processor.dart';
+import 'event_processor/exception/exception_group_event_processor.dart';
+import 'hint.dart';
 import 'hub.dart';
 import 'hub_adapter.dart';
 import 'integration.dart';
+import 'load_dart_debug_images_integration.dart';
 import 'noop_hub.dart';
 import 'noop_isolate_error_integration.dart'
     if (dart.library.io) 'isolate_error_integration.dart';
 import 'protocol.dart';
+import 'protocol/sentry_feedback.dart';
+import 'run_zoned_guarded_integration.dart';
+import 'sentry_attachment/sentry_attachment.dart';
 import 'sentry_client.dart';
 import 'sentry_options.dart';
 import 'sentry_run_zoned_guarded.dart';
-import 'sentry_user_feedback.dart';
 import 'tracing.dart';
-import 'sentry_attachment/sentry_attachment.dart';
 import 'transport/data_category.dart';
 import 'transport/task_queue.dart';
+import 'feature_flags_integration.dart';
+import 'sentry_logger.dart';
+import 'logs_enricher_integration.dart';
 
 /// Configuration options callback
 typedef OptionsConfiguration = FutureOr<void> Function(SentryOptions);
@@ -62,11 +64,11 @@ class Sentry {
       }
       _taskQueue = DefaultTaskQueue<SentryId>(
         sentryOptions.maxQueueSize,
-        sentryOptions.logger,
+        sentryOptions.log,
         sentryOptions.recorder,
       );
     } catch (exception, stackTrace) {
-      sentryOptions.logger(
+      sentryOptions.log(
         SentryLevel.error,
         'Error in options configuration.',
         exception: exception,
@@ -89,21 +91,35 @@ class Sentry {
     _setEnvironmentVariables(options);
 
     // Throws when running on the browser
-    if (!options.platformChecker.isWeb) {
+    if (!options.platform.isWeb) {
       // catch any errors that may occur within the entry function, main()
       // in the ‘root zone’ where all Dart programs start
       options.addIntegrationByIndex(0, IsolateErrorIntegration());
+    }
+
+    if (options.runtimeChecker.isDebugMode()) {
+      options.debug = true;
+      options.log(
+        SentryLevel.debug,
+        'Debug mode is enabled: Application is running in a debug environment.',
+      );
     }
 
     if (options.enableDartSymbolication) {
       options.addIntegration(LoadDartDebugImagesIntegration());
     }
 
+    options.addIntegration(FeatureFlagsIntegration());
+    options.addIntegration(LogsEnricherIntegration());
+
     options.addEventProcessor(EnricherEventProcessor(options));
     options.addEventProcessor(ExceptionEventProcessor(options));
     options.addEventProcessor(DeduplicationEventProcessor(options));
 
     options.prependExceptionTypeIdentifier(DartExceptionTypeIdentifier());
+
+    // Added last to ensure all error events have correct parent/child relationships
+    options.addEventProcessor(ExceptionGroupEventProcessor(options));
   }
 
   /// This method reads available environment variables and uses them
@@ -117,7 +133,7 @@ class Sentry {
     options.dsn = options.dsn ?? vars.dsn;
 
     if (options.environment == null) {
-      var environment = vars.environmentForMode(options.platformChecker);
+      var environment = vars.environmentForMode(options.runtimeChecker);
       options.environment = vars.environment ?? environment;
     }
 
@@ -133,7 +149,7 @@ class Sentry {
     RunZonedGuardedOnError? runZonedGuardedOnError,
   ) async {
     if (isEnabled) {
-      options.logger(
+      options.log(
         SentryLevel.warning,
         'Sentry has been already initialized. Previous configuration will be overwritten.',
       );
@@ -207,6 +223,7 @@ class Sentry {
     dynamic throwable, {
     dynamic stackTrace,
     Hint? hint,
+    SentryMessage? message,
     ScopeCallback? withScope,
   }) =>
       _taskQueue.enqueue(
@@ -214,6 +231,7 @@ class Sentry {
           throwable,
           stackTrace: stackTrace,
           hint: hint,
+          message: message,
           withScope: withScope,
         ),
         SentryId.empty(),
@@ -241,14 +259,6 @@ class Sentry {
         SentryId.empty(),
         DataCategory.unknown,
       );
-
-  /// Reports a [userFeedback] to Sentry.io.
-  ///
-  /// First capture an event and use the [SentryId] to create a [SentryUserFeedback]
-  @Deprecated(
-      'Will be removed in a future version. Use [captureFeedback] instead')
-  static Future<void> captureUserFeedback(SentryUserFeedback userFeedback) =>
-      _hub.captureUserFeedback(userFeedback);
 
   /// Reports [SentryFeedback] to Sentry.io.
   ///
@@ -357,12 +367,28 @@ class Sentry {
       );
 
   /// Gets the current active transaction or span bound to the scope.
+  /// Returns `null` if performance is disabled in the options.
   static ISentrySpan? getSpan() => _hub.getSpan();
 
-  /// Gets access to the metrics API for the current hub.
-  @Deprecated(
-      'Metrics will be deprecated and removed in the next major release. Sentry will reject all metrics sent after October 7, 2024. Learn more: https://sentry.zendesk.com/hc/en-us/articles/26369339769883-Upcoming-API-Changes-to-Metrics')
-  static MetricsApi metrics() => _hub.metricsApi;
+  static Future<void> addFeatureFlag(String flag, dynamic result) async {
+    if (result is! bool) {
+      return;
+    }
+
+    final featureFlagsIntegration = currentHub.options.integrations
+        .whereType<FeatureFlagsIntegration>()
+        .firstOrNull;
+
+    if (featureFlagsIntegration == null) {
+      currentHub.options.log(
+        SentryLevel.warning,
+        '$FeatureFlagsIntegration not found. Make sure Sentry is initialized before accessing the addFeatureFlag API.',
+      );
+      return;
+    }
+
+    await featureFlagsIntegration.addFeatureFlag(flag, result);
+  }
 
   @internal
   static Hub get currentHub => _hub;
@@ -394,7 +420,7 @@ class Sentry {
   ///   // On top of that, you can do your own custom stuff in this callback.
   /// });
   /// ```
-  static runZonedGuarded<R>(
+  static dynamic runZonedGuarded<R>(
     R Function() body,
     void Function(Object error, StackTrace stack)? onError, {
     Map<Object?, Object?>? zoneValues,
@@ -407,4 +433,6 @@ class Sentry {
         zoneValues: zoneValues,
         zoneSpecification: zoneSpecification,
       );
+
+  static SentryLogger get logger => currentHub.options.logger;
 }

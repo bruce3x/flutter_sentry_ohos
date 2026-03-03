@@ -14,7 +14,6 @@
  */
 
 import { SentryOptions } from './SentryOptions';
-import { ITransport } from './Transport';
 import { Session, SessionStatus } from './Session';
 import { ClientReport } from './ClientReport';
 import { SentryBaseEvent, SentryEvent, SentryTransaction } from './SentryEvent';
@@ -27,10 +26,8 @@ import { SentryException } from './SentryException';
 import { HttpTransport } from './HttpTransport';
 import type { AttachmentSpec } from './HttpTransport';
 import { SentryLevel } from './SentryLevel';
-import { Sentry } from './Sentry';
 import { IScopes } from './Scopes';
 import { collectDeviceContext } from '../core/Context';
-import { sentryDebug } from './SentryLogger';
 
 type Primitive = string | number | boolean | null | undefined;
 
@@ -154,10 +151,6 @@ export class Hub implements IScopes {
     this._lastEventId = event.event_id;
     if (this.session) {
       this.session.incrementErrors();
-      if (this.session.errors > 0) {
-        // 会话错误计数增加后的日志，便于分析异常追踪和会话状态
-        sentryDebug('Hub', `Session errors incremented: count=${this.session.errors}, sessionId=${this.session.sessionId || 'unknown'}, status=${this.session.status || 'unknown'}`);
-      }
     }
   }
 
@@ -301,7 +294,7 @@ export class Hub implements IScopes {
         event.user = def;
       }
     }
-    // overwrite level/transaction/fingerprint if set on scope
+    // overwrite level/fingerprint if set on scope
     if (this.scope.level) event.level = this.scope.level;
     if (this.scope.fingerprint) event.fingerprint = this.scope.fingerprint.slice();
   }
@@ -414,10 +407,14 @@ export class Hub implements IScopes {
   clone(): Hub {
     const newHub = new Hub(this.options);
     newHub.scope = this.scope.clone();
-    newHub.transport = this.transport; // Transport 通常共享实例
-    newHub.session = this.session;     // Session 可以共享
-    newHub.clientReport = this.clientReport; // ClientReport 可以共享
-    newHub.cache = this.cache;         // 缓存共享
+    // Transport 通常共享实例
+    newHub.transport = this.transport;
+    // Session 可以共享
+    newHub.session = this.session;
+    // ClientReport 可以共享
+    newHub.clientReport = this.clientReport;
+    // 缓存共享
+    newHub.cache = this.cache;
     return newHub;
   }
 

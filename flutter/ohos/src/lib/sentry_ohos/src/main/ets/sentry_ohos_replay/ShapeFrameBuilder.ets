@@ -50,7 +50,6 @@ export interface ComponentLayoutInfo {
   width: number;
   height: number;
   radius?: number;
-  // future: state flags (focused/pressed/disabled) to alter style
 }
 
 export class ShapeFrameBuilder {

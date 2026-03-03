@@ -135,56 +135,42 @@ void main() {
       expect(actualItem, expectedItem);
     });
 
-    test('fromUserFeedback', () async {
-      final eventId = SentryId.newId();
-      // ignore: deprecated_member_use_from_same_package
-      final userFeedback = SentryUserFeedback(
-          eventId: eventId, name: 'name', email: 'email', comments: 'comments');
-      final sdkVersion =
-          SdkVersion(name: 'fixture-name', version: 'fixture-version');
-      // ignore: deprecated_member_use_from_same_package
-      final sut = SentryEnvelope.fromUserFeedback(
-        userFeedback,
-        sdkVersion,
-        dsn: fakeDsn,
+    test('fromLogs', () async {
+      final logs = [
+        SentryLog(
+          timestamp: DateTime.now(),
+          traceId: SentryId.newId(),
+          level: SentryLogLevel.info,
+          body: 'test',
+          attributes: {
+            'test': SentryLogAttribute.string('test'),
+          },
+        ),
+        SentryLog(
+          timestamp: DateTime.now(),
+          traceId: SentryId.newId(),
+          level: SentryLogLevel.info,
+          body: 'test2',
+          attributes: {
+            'test2': SentryLogAttribute.int(9001),
+          },
+        ),
+      ];
+
+      final sdkVersion = SdkVersion(
+        name: 'fixture-name',
+        version: 'fixture-version',
       );
 
-      final expectedEnvelopeItem =
-          // ignore: deprecated_member_use_from_same_package
-          SentryEnvelopeItem.fromUserFeedback(userFeedback);
-
-      expect(sut.header.eventId, eventId);
-      expect(sut.header.sdkVersion, sdkVersion);
-      expect(sut.header.dsn, fakeDsn);
-      expect(sut.items[0].header.contentType,
-          expectedEnvelopeItem.header.contentType);
-      expect(sut.items[0].header.type, expectedEnvelopeItem.header.type);
-
-      final actualItem = await sut.items[0].dataFactory();
-      final expectedItem = await expectedEnvelopeItem.dataFactory();
-      expect(actualItem, expectedItem);
-    });
-
-    test('fromMetrics', () async {
-      final sdkVersion =
-          SdkVersion(name: 'fixture-name', version: 'fixture-version');
-      final sut = SentryEnvelope.fromMetrics(
-        fakeMetrics,
-        sdkVersion,
-        dsn: fakeDsn,
-      );
-
-      final expectedEnvelopeItem = SentryEnvelopeItem.fromMetrics(fakeMetrics);
+      final sut = SentryEnvelope.fromLogs(logs, sdkVersion);
 
       expect(sut.header.sdkVersion, sdkVersion);
-      expect(sut.header.dsn, fakeDsn);
-      expect(sut.items[0].header.contentType,
-          expectedEnvelopeItem.header.contentType);
-      expect(sut.items[0].header.type, expectedEnvelopeItem.header.type);
 
-      final actualItem = await sut.items[0].dataFactory();
-      final expectedItem = await expectedEnvelopeItem.dataFactory();
-      expect(actualItem, expectedItem);
+      final expectedItem = SentryEnvelopeItem.fromLogs(logs);
+      final expectedItemData = await expectedItem.dataFactory();
+      final actualItemData = await sut.items[0].dataFactory();
+
+      expect(actualItemData, expectedItemData);
     });
 
     test('max attachment size', () async {

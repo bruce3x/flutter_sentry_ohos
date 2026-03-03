@@ -18,13 +18,6 @@ import fs from '@ohos.file.fs';
 import util from '@ohos.util';
 import { SentryBaseEvent } from './SentryEvent';
 
-// 日志标签
-const CACHE_TAG = '[Sentry] [Cache]';
-
-// 批量加载配置
-const DEFAULT_BATCH_SIZE: number = 10; // 每批加载的 envelope 数量
-const BACKGROUND_ROTATION_INTERVAL_MS: number = 60 * 1000; // 后台轮换间隔：1分钟
-
 /**
  * Interface for envelope send status record.
  * Stores the envelope ID and the timestamp when it was successfully sent.
@@ -72,74 +65,12 @@ export interface CacheStats {
   sent: number;
 }
 
-/**
- * Background cache rotator that runs periodically to clean up old envelopes.
- * This prevents blocking the main thread during store operations.
- */
-class BackgroundCacheRotator {
-  private cache: FileEnvelopeCache;
-  private timerId: number | null = null;
-  private isRunning: boolean = false;
-  private intervalMs: number;
-
-  constructor(cache: FileEnvelopeCache, intervalMs: number = BACKGROUND_ROTATION_INTERVAL_MS) {
-    this.cache = cache;
-    this.intervalMs = intervalMs;
-  }
-
-  /**
-   * Start the background rotation timer.
-   */
-  public start(): void {
-    if (this.isRunning) {
-      return;
-    }
-    this.isRunning = true;
-    // Background rotation started
-
-    // Use setInterval for periodic execution
-    const intervalId = setInterval(() => {
-      this.performRotation();
-    }, this.intervalMs);
-    this.timerId = Number(intervalId);
-  }
-
-  /**
-   * Stop the background rotation timer.
-   */
-  public stop(): void {
-    if (this.timerId !== null) {
-      clearInterval(this.timerId);
-      this.timerId = null;
-    }
-    this.isRunning = false;
-    // Background rotation stopped
-  }
-
-  /**
-   * Perform one rotation cycle.
-   */
-  private performRotation(): void {
-    try {
-      // Run rotation in a microtask to avoid blocking
-      Promise.resolve().then(() => {
-        this.cache.rotateCacheIfNeededAsync().catch((e: Error) => {
-          console.error(`${CACHE_TAG} Background rotation failed: ${e}`);
-        });
-      });
-    } catch (e) {
-      console.error(`${CACHE_TAG} Background rotation error: ${e}`);
-    }
-  }
-}
-
 export class FileEnvelopeCache {
   private cacheDir: string;
   private dirCreated: boolean = false;
   private sendStatusFile: string;
   private sendStatusCache: Map<string, number> = new Map(); // id -> sentAt timestamp
   private maxCacheItems: number;
-  private backgroundRotator: BackgroundCacheRotator | null = null;
 
   /**
    * Create a new FileEnvelopeCache.
@@ -181,7 +112,7 @@ export class FileEnvelopeCache {
       this.dirCreated = true;
       // Directory created
     } catch (e) {
-      console.error(`${CACHE_TAG} Failed to create cache directory: ${e}`);
+      console.error(`[Sentry] [Cache] Failed to create cache directory: ${e}`);
     }
   }
 
@@ -195,16 +126,15 @@ export class FileEnvelopeCache {
       fileio.closeSync(fd);
       // Event stored
     } catch (e) {
-      console.error(`${CACHE_TAG} Failed to store event ${event.event_id}: ${e}`);
+      console.error(`[Sentry] [Cache] Failed to store event ${event.event_id}: ${e}`);
     }
   }
 
   discard(eventId: string): void {
     const path = `${this.cacheDir}/${eventId}.json`;
-    try {
-      fileio.unlinkSync(path);
+    try { fileio.unlinkSync(path);
     } catch (e) {
-      console.error(`${CACHE_TAG} Failed to discard event ${eventId}: ${e}`);
+      console.error(`sentry ${e}`)
     }
   }
 
@@ -226,28 +156,20 @@ export class FileEnvelopeCache {
       // Raw envelope stored
       return id;
     } catch (e) {
-      console.error(`${CACHE_TAG} Failed to store raw envelope: ${e}`);
+      console.error(`[Sentry] [Cache] Failed to store raw envelope: ${e}`);
       return null;
     }
   }
 
   /**
-   * Delete a raw envelope file after successful upload.
+   * Mark a raw envelope as successfully sent (instead of immediate deletion).
+   * The envelope file is kept for analysis purposes and will be cleaned up
+   * after the retention period (3 days).
    */
   discardRawEnvelope(envelopeId: string): void {
-    const path = `${this.cacheDir}/${envelopeId}.envelope`;
-    try {
-      if (fs.accessSync(path)) {
-        fileio.unlinkSync(path);
-        // Raw envelope deleted
-      }
-    } catch (e) {
-      console.error(`${CACHE_TAG} Failed to delete raw envelope ${envelopeId}: ${e}`);
-    }
-    // Also remove from send status cache if present
-    if (this.sendStatusCache.has(envelopeId)) {
-      this.sendStatusCache.delete(envelopeId);
-    }
+    // Mark as sent instead of deleting immediately
+    this.markEnvelopeAsSent(envelopeId);
+    // Marked raw envelope as sent
   }
 
   /**
@@ -267,7 +189,7 @@ export class FileEnvelopeCache {
   }
 
   /**
-   * Load send status from persistent storage file. (Sync version)
+   * Load send status from persistent storage file.
    */
   private loadSendStatus(): void {
     try {
@@ -285,7 +207,7 @@ export class FileEnvelopeCache {
       fileio.closeSync(fd);
       const decoder = new util.TextDecoder("utf-8");
       const u8 = new Uint8Array(buf, 0, bytesRead);
-      const content = decoder.decodeWithStream(u8);
+      const content = decoder.decode(u8);
       const storage: SendStatusStorage = JSON.parse(content) as SendStatusStorage;
       if (storage.envelopes && Array.isArray(storage.envelopes)) {
         for (let i = 0; i < storage.envelopes.length; i++) {
@@ -301,41 +223,7 @@ export class FileEnvelopeCache {
   }
 
   /**
-   * Async version: Load send status from persistent storage file.
-   */
-  public async loadSendStatusAsync(): Promise<void> {
-    try {
-      const exists = fs.accessSync(this.sendStatusFile);
-      if (!exists) {
-        return;
-      }
-      const stat = await fs.stat(this.sendStatusFile);
-      if (stat.size <= 0) {
-        return;
-      }
-      const file = await fs.open(this.sendStatusFile, fs.OpenMode.READ_ONLY);
-      const buf = new ArrayBuffer(stat.size);
-      const bytesRead = await fs.read(file.fd, buf);
-      await fs.close(file);
-
-      const decoder = new util.TextDecoder("utf-8");
-      const u8 = new Uint8Array(buf, 0, bytesRead);
-      const content = decoder.decodeWithStream(u8);
-      const storage: SendStatusStorage = JSON.parse(content) as SendStatusStorage;
-      if (storage.envelopes && Array.isArray(storage.envelopes)) {
-        for (let i = 0; i < storage.envelopes.length; i++) {
-          const item = storage.envelopes[i];
-          this.sendStatusCache.set(item.id, item.sentAt);
-        }
-        // Async send status records loaded
-      }
-    } catch (e) {
-      // No existing send status file
-    }
-  }
-
-  /**
-   * Save send status to persistent storage file. (Sync version)
+   * Save send status to persistent storage file.
    */
   private saveSendStatus(): void {
     try {
@@ -350,28 +238,7 @@ export class FileEnvelopeCache {
       fileio.writeSync(fd, content);
       fileio.closeSync(fd);
     } catch (e) {
-      console.error(`${CACHE_TAG} Failed to save send status: ${e}`);
-    }
-  }
-
-  /**
-   * Async version: Save send status to persistent storage file.
-   */
-  public async saveSendStatusAsync(): Promise<void> {
-    try {
-      const envelopes: Array<EnvelopeSendStatus> = [];
-      this.sendStatusCache.forEach((sentAt: number, id: string) => {
-        const status: EnvelopeSendStatus = { id: id, sentAt: sentAt };
-        envelopes.push(status);
-      });
-      const storage: SendStatusStorage = { envelopes: envelopes };
-      const content = JSON.stringify(storage);
-      const file = await fs.open(this.sendStatusFile,
-        fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      await fs.write(file.fd, content);
-      await fs.close(file);
-    } catch (e) {
-      console.error(`${CACHE_TAG} Failed to save send status async: ${e}`);
+      console.error(`[Sentry] [Cache] Failed to save send status: ${e}`);
     }
   }
 
@@ -383,7 +250,7 @@ export class FileEnvelopeCache {
   cleanupOldSentEnvelopes(): number {
     const now = Date.now();
     const idsToCleanup: Array<string> = [];
-
+    
     // Find envelopes that have exceeded retention period
     this.sendStatusCache.forEach((sentAt: number, id: string) => {
       const age = now - sentAt;
@@ -391,14 +258,14 @@ export class FileEnvelopeCache {
         idsToCleanup.push(id);
       }
     });
-
+    
     if (idsToCleanup.length === 0) {
       // No old sent envelopes to clean up
       return 0;
     }
-
+    
     // Cleaning up old sent envelopes
-
+    
     let cleanedCount = 0;
     for (let i = 0; i < idsToCleanup.length; i++) {
       const id = idsToCleanup[i];
@@ -417,7 +284,7 @@ export class FileEnvelopeCache {
       this.sendStatusCache.delete(id);
       cleanedCount++;
     }
-
+    
     // Save updated status
     this.saveSendStatus();
     // Old sent envelopes cleaned up
@@ -431,10 +298,9 @@ export class FileEnvelopeCache {
   getStats(): CacheStats {
     let totalFiles = 0;
     let sentCount = 0;
-
-    let dir: fileio.Dir | null = null;
+    
     try {
-      dir = fileio.opendirSync(this.cacheDir);
+      const dir = fileio.opendirSync(this.cacheDir);
       let dirent: fileio.Dirent | null | undefined;
       while ((dirent = dir.readSync()) != null && dirent !== undefined) {
         if (dirent.isFile() && dirent.name.endsWith(".envelope")) {
@@ -449,7 +315,7 @@ export class FileEnvelopeCache {
     } catch (e) {
       // Ignore errors
     }
-
+    
     const stats: CacheStats = {
       total: totalFiles,
       pending: totalFiles - sentCount,
@@ -460,7 +326,7 @@ export class FileEnvelopeCache {
 
   /**
    * Get list of pending (unsent) envelope IDs without loading file content.
-   * This is lightweight and suitable for pagination.
+   * This is lightweight and suitable for checking if retry is needed.
    */
   public pendingEnvelopeIds(): Array<string> {
     const ids: Array<string> = [];
@@ -473,81 +339,18 @@ export class FileEnvelopeCache {
       while ((dirent = dir.readSync()) != null && dirent !== undefined) {
         if (dirent.isFile() && dirent.name.endsWith(".envelope")) {
           const id = dirent.name.replace('.envelope', '');
-          ids.push(id);
+          // Only include unsent envelopes
+          if (!this.sendStatusCache.has(id)) {
+            ids.push(id);
+          }
         }
       }
     } catch (e) {
-      console.error(`${CACHE_TAG} Failed to list pending envelope IDs: ${e}`);
+      console.error(`[Sentry] [Cache] Failed to list pending envelope IDs: ${e}`);
     } finally {
       if (dir) dir.closeSync();
     }
     return ids;
-  }
-
-  /**
-   * Async load a single envelope by ID.
-   * Returns null if not found or failed to load.
-   */
-  public async loadEnvelopeByIdAsync(id: string): Promise<CachedRawEnvelope | null> {
-    const path = `${this.cacheDir}/${id}.envelope`;
-    try {
-      const exists = fs.accessSync(path);
-      if (!exists) {
-        return null;
-      }
-      const stat = await fs.stat(path);
-      if (stat.size <= 0) {
-        return null;
-      }
-      const file = await fs.open(path, fs.OpenMode.READ_ONLY);
-      const buf = new ArrayBuffer(stat.size);
-      const bytesRead = await fs.read(file.fd, buf);
-      await fs.close(file);
-
-      const envelope: CachedRawEnvelope = {
-        id: id,
-        bytes: new Uint8Array(buf, 0, bytesRead)
-      };
-      return envelope;
-    } catch (e) {
-      console.error(`${CACHE_TAG} Failed to load envelope ${id}: ${e}`);
-      return null;
-    }
-  }
-
-  /**
-   * Load raw envelopes in batches (pagination support).
-   * @param offset Starting index
-   * @param limit Maximum number to load (default: DEFAULT_BATCH_SIZE)
-   * @returns Array of loaded envelopes
-   */
-  public async allRawEnvelopesBatchAsync(
-    offset: number = 0,
-    limit: number = DEFAULT_BATCH_SIZE
-  ): Promise<Array<CachedRawEnvelope>> {
-    const pendingIds = this.pendingEnvelopeIds();
-    const totalPending = pendingIds.length;
-
-    if (offset >= totalPending) {
-      return [];
-    }
-
-    const endIndex = Math.min(offset + limit, totalPending);
-    const batchIds = pendingIds.slice(offset, endIndex);
-
-    // Loading batch
-
-    const envelopes: Array<CachedRawEnvelope> = [];
-    for (let i = 0; i < batchIds.length; i++) {
-      const id = batchIds[i];
-      const envelope = await this.loadEnvelopeByIdAsync(id);
-      if (envelope) {
-        envelopes.push(envelope);
-      }
-    }
-
-    // Batch loaded
-    return envelopes;
   }
 
   /**
@@ -556,7 +359,7 @@ export class FileEnvelopeCache {
    */
   private getAllEnvelopeFilesSorted(): Array<EnvelopeFileInfo> {
     const files: Array<EnvelopeFileInfo> = [];
-
+    
     let dir: fileio.Dir | null = null;
     try {
       dir = fileio.opendirSync(this.cacheDir);
@@ -581,15 +384,15 @@ export class FileEnvelopeCache {
     } catch (e) {
       // Directory doesn't exist or can't be read
     }
-
+    
     // Sort files by modification time (oldest first)
     files.sort((a: EnvelopeFileInfo, b: EnvelopeFileInfo) => a.modifiedTime - b.modifiedTime);
-
+    
     return files;
   }
 
   /**
-   * Rotate the cache if the number of files exceeds maxCacheItems. (Sync version)
+   * Rotate the cache if the number of files exceeds maxCacheItems.
    * Prioritizes deleting already-sent envelopes first to preserve unsent events.
    * Falls back to deleting oldest unsent envelopes if needed.
    * This is called before storing new envelopes.
@@ -598,22 +401,22 @@ export class FileEnvelopeCache {
   private rotateCacheIfNeeded(): void {
     const files = this.getAllEnvelopeFilesSorted();
     const length = files.length;
-
+    
     if (length < this.maxCacheItems) {
       // No rotation needed
       return;
     }
-
+    
     // Calculate how many files to delete
     // We need to delete enough files so that after adding 1 new file, we're still under the limit
     const totalToDelete = (length - this.maxCacheItems) + 1;
-
-    console.warn(`${CACHE_TAG} Cache is full (${length}/${this.maxCacheItems}). Rotating cache, need to delete ${totalToDelete} files`);
-
+    
+    console.warn(`[Sentry] [Cache] Cache is full (${length}/${this.maxCacheItems}). Rotating cache, need to delete ${totalToDelete} files`);
+    
     // Separate files into sent and unsent, both sorted by oldest first
     const sentFiles: Array<EnvelopeFileInfo> = [];
     const unsentFiles: Array<EnvelopeFileInfo> = [];
-
+    
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const id = file.name.replace('.envelope', '');
@@ -623,132 +426,50 @@ export class FileEnvelopeCache {
         unsentFiles.push(file);
       }
     }
-
+    
     let deletedCount = 0;
-
+    
     // Priority 1: Delete oldest SENT files first (they've already been uploaded)
     for (let i = 0; i < sentFiles.length && deletedCount < totalToDelete; i++) {
       const file = sentFiles[i];
       const id = file.name.replace('.envelope', '');
-
+      
       try {
         fileio.unlinkSync(file.path);
         // Deleted sent envelope for rotation
         this.sendStatusCache.delete(id);
         deletedCount++;
       } catch (e) {
-        console.warn(`${CACHE_TAG} Failed to delete sent file: ${file.name}`);
+        console.warn(`[Sentry] [Cache] Failed to delete sent file: ${file.name}`);
       }
     }
-
+    
     // Priority 2: If still need to delete more, delete oldest UNSENT files
     if (deletedCount < totalToDelete) {
-      console.warn(`${CACHE_TAG} Not enough sent files to delete (${deletedCount}/${totalToDelete}), deleting unsent files`);
-
+      console.warn(`[Sentry] [Cache] Not enough sent files to delete (${deletedCount}/${totalToDelete}), deleting unsent files`);
+      
       for (let i = 0; i < unsentFiles.length && deletedCount < totalToDelete; i++) {
         const file = unsentFiles[i];
-
+        
         try {
           fileio.unlinkSync(file.path);
-          console.warn(`${CACHE_TAG} Deleted unsent envelope for rotation (data loss): ${file.name}`);
+          console.warn(`[Sentry] [Cache] Deleted unsent envelope for rotation (data loss): ${file.name}`);
           deletedCount++;
         } catch (e) {
-          console.warn(`${CACHE_TAG} Failed to delete unsent file: ${file.name}`);
+          console.warn(`[Sentry] [Cache] Failed to delete unsent file: ${file.name}`);
         }
       }
     }
-
+    
     // Rotation complete
-
+    
     // Save updated send status
     this.saveSendStatus();
   }
 
   /**
-   * Async version of cache rotation.
-   * Rotates the cache if the number of files exceeds maxCacheItems.
-   */
-  public async rotateCacheIfNeededAsync(): Promise<void> {
-    const files = this.getAllEnvelopeFilesSorted();
-    const length = files.length;
-
-    if (length < this.maxCacheItems) {
-      return;
-    }
-
-    const totalToDelete = (length - this.maxCacheItems) + 1;
-    console.warn(`${CACHE_TAG} Async rotation: ${length}/${this.maxCacheItems}, deleting ${totalToDelete} files`);
-
-    // Separate files into sent and unsent
-    const sentFiles: Array<EnvelopeFileInfo> = [];
-    const unsentFiles: Array<EnvelopeFileInfo> = [];
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const id = file.name.replace('.envelope', '');
-      if (this.sendStatusCache.has(id)) {
-        sentFiles.push(file);
-      } else {
-        unsentFiles.push(file);
-      }
-    }
-
-    let deletedCount = 0;
-
-    // Priority 1: Delete oldest SENT files first
-    for (let i = 0; i < sentFiles.length && deletedCount < totalToDelete; i++) {
-      const file = sentFiles[i];
-      const id = file.name.replace('.envelope', '');
-      try {
-        await fs.unlink(file.path);
-        this.sendStatusCache.delete(id);
-        deletedCount++;
-      } catch (e) {
-        // File may already be deleted
-      }
-    }
-
-    // Priority 2: Delete oldest UNSENT files if needed
-    if (deletedCount < totalToDelete) {
-      for (let i = 0; i < unsentFiles.length && deletedCount < totalToDelete; i++) {
-        const file = unsentFiles[i];
-        try {
-          await fs.unlink(file.path);
-          deletedCount++;
-          console.warn(`${CACHE_TAG} Deleted unsent envelope (data loss): ${file.name}`);
-        } catch (e) {
-          // File may already be deleted
-        }
-      }
-    }
-
-    await this.saveSendStatusAsync();
-    // Async rotation complete
-  }
-
-  /**
-   * Start background cache rotation.
-   * Should be called when the app starts.
-   */
-  public startBackgroundRotation(): void {
-    if (!this.backgroundRotator) {
-      this.backgroundRotator = new BackgroundCacheRotator(this);
-    }
-    this.backgroundRotator.start();
-  }
-
-  /**
-   * Stop background cache rotation.
-   * Should be called when the app goes to background or shuts down.
-   */
-  public stopBackgroundRotation(): void {
-    if (this.backgroundRotator) {
-      this.backgroundRotator.stop();
-    }
-  }
-
-  /**
-   * Get all cached raw envelopes.
+   * Get all cached raw envelopes that have NOT been sent yet.
+   * Already-sent envelopes are excluded (they are kept for analysis but not re-sent).
    */
   allRawEnvelopes(): Array<CachedRawEnvelope> {
     const envelopes: Array<CachedRawEnvelope> = [];
@@ -759,10 +480,16 @@ export class FileEnvelopeCache {
       dir = fileio.opendirSync(this.cacheDir);
       let dirent: fileio.Dirent | null | undefined;
       let fileCount = 0;
+      let skippedSent = 0;
       while ((dirent = dir.readSync()) != null && dirent !== undefined) {
         if (dirent.isFile() && dirent.name.endsWith(".envelope")) {
           fileCount++;
           const id = dirent.name.replace('.envelope', '');
+          // Skip envelopes that have already been sent
+          if (this.sendStatusCache.has(id)) {
+            skippedSent++;
+            continue;
+          }
           const path = `${this.cacheDir}/${dirent.name}`;
           try {
             const stat = fileio.statSync(path);
@@ -774,14 +501,15 @@ export class FileEnvelopeCache {
             fileio.closeSync(fd);
             const envelope: CachedRawEnvelope = { id: id, bytes: new Uint8Array(buf, 0, bytesRead) };
             envelopes.push(envelope);
+            // Loaded cached raw envelope
           } catch (fileError) {
-            console.error(`${CACHE_TAG} Failed to read envelope file ${dirent.name}: ${fileError}`);
+            console.error(`[Sentry] [Cache] Failed to read envelope file ${dirent.name}: ${fileError}`);
           }
         }
       }
       // Envelopes loaded
     } catch (e) {
-      console.error(`${CACHE_TAG} Failed to read cache directory for envelopes: ${e}`);
+      console.error(`[Sentry] [Cache] Failed to read cache directory for envelopes: ${e}`);
     } finally {
       if (dir) dir.closeSync();
     }
@@ -792,7 +520,7 @@ export class FileEnvelopeCache {
     const events: Array<SentryBaseEvent> = [];
     // Ensure directory exists before reading
     this.ensureDirExists();
-
+    
     let dir: fileio.Dir | null = null;
     try {
       dir = fileio.opendirSync(this.cacheDir);
@@ -815,18 +543,18 @@ export class FileEnvelopeCache {
             fileio.closeSync(fd);
             const decoder = new util.TextDecoder("utf-8");
             const u8 = new Uint8Array(buf, 0, bytesRead);
-            const content = decoder.decodeWithStream(u8);
+            const content = decoder.decode(u8);
             events.push(JSON.parse(content) as SentryBaseEvent);
             // Cached event loaded
           } catch (fileError) {
             // Log error but continue to next file (Android EnvelopeCache pattern)
-            console.error(`${CACHE_TAG} Failed to read file ${dirent.name}: ${fileError}`);
+            console.error(`[Sentry] [Cache] Failed to read file ${dirent.name}: ${fileError}`);
           }
         }
       }
       // Events loaded from cache
     } catch (e) {
-      console.error(`${CACHE_TAG} Failed to read cache directory ${this.cacheDir}: ${e}`);
+      console.error(`[Sentry] [Cache] Failed to read cache directory ${this.cacheDir}: ${e}`);
     }
     finally { if (dir) dir.closeSync(); }
     return events;

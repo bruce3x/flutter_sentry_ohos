@@ -37,8 +37,10 @@ export interface UserActionEvent {
   dx?: number;
   dy?: number;
   direction?: SwipeDirection;
-  duration?: number; // 持续时间 ms（从 down 到 up）
-  extra?: string;    // 可放任意短说明
+  // 持续时间 ms（从 down 到 up）
+  duration?: number;
+  // 可放任意短说明
+  extra?: string;
 }
 
 export type SwipeDirection = "Left" | "Right" | "Up" | "Down";
@@ -60,19 +62,27 @@ export interface ReplayPayload {
   // 以下字段用于构建标准 replay_event / replay_recording（Android 对齐）
   replay_id?: string;
   segment_id?: number;
-  started_at?: string;           // ISO8601
-  finished_at?: string;          // ISO8601
-  replay_start_timestamp?: number; // seconds
-  timestamp?: number;              // seconds
+  // ISO8601
+  started_at?: string;
+  // ISO8601           
+  finished_at?: string;
+  // seconds          
+  replay_start_timestamp?: number;
+  // seconds 
+  timestamp?: number;
   urls?: Array<string>;
-  replay_type?: string;          // 'session'
-  platform?: string;            // 'android'
+  // 'session'
+  replay_type?: string;
+  // 'android'    
+  platform?: string;
   error_ids?: Array<string>;
   trace_ids?: Array<string>;
   release?: string;
   environment?: string;
-  duration?: number;            // seconds
-  durationMs?: number;          // milliseconds
+  // seconds
+  duration?: number;
+  // milliseconds
+  durationMs?: number;
   // 可选：本地 MP4 路径与大小（用于 envelope 中的 replay_recording）
   videoPath?: string;
   videoSizeBytes?: number;

@@ -4,6 +4,7 @@ import 'dart:collection';
 import 'package:meta/meta.dart';
 
 import 'event_processor.dart';
+import 'event_processor/run_event_processors.dart';
 import 'hint.dart';
 import 'propagation_context.dart';
 import 'protocol.dart';
@@ -42,6 +43,17 @@ class Scope {
   /// Returns active transaction or null if there is no active transaction.
   ISentrySpan? span;
 
+  /// The propagation context for connecting errors and spans to traces.
+  /// There should always be a propagation context available at all times.
+  ///
+  /// Default behaviour of trace generation in Flutter:
+  ///
+  /// If `SentryNavigatorObserver` is available:
+  ///  - new trace on navigation for all platforms
+  ///
+  /// if `SentryNavigatorObserver` is not available:
+  ///  - Mobile: traces will be cycled with the background/foreground hooks, similar to how sessions are defined in mobile
+  ///  - Web: traces will stick until the next refresh (this might change in the future)
   @internal
   PropagationContext propagationContext = PropagationContext();
 
@@ -172,14 +184,14 @@ class Scope {
           hint,
         );
         if (processedBreadcrumb == null) {
-          _options.logger(
+          _options.log(
             SentryLevel.info,
             'Breadcrumb was dropped by beforeBreadcrumb',
           );
           return null;
         }
       } catch (exception, stackTrace) {
-        _options.logger(
+        _options.log(
           SentryLevel.error,
           'The BeforeBreadcrumb callback threw an exception',
           exception: exception,
@@ -245,6 +257,7 @@ class Scope {
     _extra.clear();
     _eventProcessors.clear();
     _replayId = null;
+    propagationContext = PropagationContext();
 
     _clearBreadcrumbsSync();
     _setUserSync(null);
@@ -297,26 +310,28 @@ class Scope {
     SentryEvent event,
     Hint hint,
   ) async {
-    event = event.copyWith(
-      transaction: event.transaction ?? transaction,
-      user: _mergeUsers(user, event.user),
-      breadcrumbs: (event.breadcrumbs?.isNotEmpty ?? false)
-          ? event.breadcrumbs
-          : List.from(_breadcrumbs),
-      tags: tags.isNotEmpty ? _mergeEventTags(event) : event.tags,
-      // ignore: deprecated_member_use_from_same_package
-      extra: extra.isNotEmpty ? _mergeEventExtra(event) : event.extra,
-    );
+    event
+      ..transaction = event.transaction ?? transaction
+      ..user = _mergeUsers(user, event.user)
+      ..tags = tags.isNotEmpty ? _mergeEventTags(event) : event.tags;
 
-    if (event is! SentryTransaction) {
-      event = event.copyWith(
-          fingerprint: (event.fingerprint?.isNotEmpty ?? false)
-              ? event.fingerprint
-              : _fingerprint,
-          level: level ?? event.level);
+    if (event.type != 'feedback') {
+      event.breadcrumbs = (event.breadcrumbs?.isNotEmpty ?? false)
+          ? event.breadcrumbs
+          : List.from(_breadcrumbs);
+      // ignore: deprecated_member_use_from_same_package
+      event.extra = extra.isNotEmpty ? _mergeEventExtra(event) : event.extra;
     }
 
-    _contexts.clone().forEach((key, value) {
+    if (event is! SentryTransaction) {
+      event
+        ..fingerprint = (event.fingerprint?.isNotEmpty ?? false)
+            ? event.fingerprint
+            : _fingerprint
+        ..level = level ?? event.level;
+    }
+
+    _contexts.forEach((key, value) {
       // add the contexts runtime list to the event.contexts.runtimes
       if (key == SentryRuntime.listType &&
           value is List<SentryRuntime> &&
@@ -341,33 +356,7 @@ class Scope {
       }
     }
 
-    SentryEvent? processedEvent = event;
-    for (final processor in _eventProcessors) {
-      try {
-        final e = processor.apply(processedEvent!, hint);
-        if (e is Future<SentryEvent?>) {
-          processedEvent = await e;
-        } else {
-          processedEvent = e;
-        }
-      } catch (exception, stackTrace) {
-        _options.logger(
-          SentryLevel.error,
-          'An exception occurred while processing event by a processor',
-          exception: exception,
-          stackTrace: stackTrace,
-        );
-        if (_options.automatedTestMode) {
-          rethrow;
-        }
-      }
-      if (processedEvent == null) {
-        _options.logger(SentryLevel.debug, 'Event was dropped by a processor');
-        break;
-      }
-    }
-
-    return processedEvent;
+    return await runEventProcessors(event, hint, _eventProcessors, _options);
   }
 
   /// Merge the scope contexts runtimes and the event contexts runtimes.
@@ -400,15 +389,14 @@ class Scope {
       return scopeUser;
     }
     // otherwise the user of scope takes precedence over the event user
-    return scopeUser?.copyWith(
-      id: eventUser?.id,
-      email: eventUser?.email,
-      ipAddress: eventUser?.ipAddress,
-      username: eventUser?.username,
-      data: _mergeUserData(eventUser?.data, scopeUser.data),
+    return scopeUser
+      ?..id = eventUser?.id
+      ..email = eventUser?.email
+      ..ipAddress = eventUser?.ipAddress
+      ..username = eventUser?.username
+      ..data = _mergeUserData(eventUser?.data, scopeUser.data)
       // ignore: deprecated_member_use_from_same_package
-      extras: _mergeUserData(eventUser?.extras, scopeUser.extras),
-    );
+      ..extras = _mergeUserData(eventUser?.extras, scopeUser.extras);
   }
 
   /// If the User on the scope and the user of an event have extra entries with
@@ -438,6 +426,7 @@ class Scope {
       .._transaction = _transaction
       ..span = span
       .._enableScopeSync = false
+      ..propagationContext = propagationContext
       .._replayId = _replayId;
 
     clone._setUserSync(user);

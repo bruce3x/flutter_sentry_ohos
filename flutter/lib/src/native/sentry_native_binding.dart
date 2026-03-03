@@ -6,7 +6,6 @@ import 'package:meta/meta.dart';
 import '../../sentry_flutter.dart';
 import '../replay/replay_config.dart';
 import 'native_app_start.dart';
-import 'native_frames.dart';
 
 /// Provide typed methods to access native layer.
 @internal
@@ -22,9 +21,7 @@ abstract class SentryNativeBinding {
   FutureOr<void> captureEnvelope(
       Uint8List envelopeData, bool containsUnhandledException);
 
-  FutureOr<void> beginNativeFrames();
-
-  FutureOr<NativeFrames?> endNativeFrames(SentryId id);
+  FutureOr<void> captureStructuredEnvelope(SentryEnvelope envelope);
 
   FutureOr<void> setUser(SentryUser? user);
 
@@ -69,5 +66,31 @@ abstract class SentryNativeBinding {
 
   FutureOr<void> setReplayConfig(ReplayConfig config);
 
-  FutureOr<SentryId> captureReplay(bool isCrash);
+  FutureOr<void> setLastErrorEventId(SentryId eventId);
+
+  FutureOr<SentryId> captureReplay();
+
+  /// Starts a new session.
+  ///
+  /// Note: This is used on web platforms. Android and iOS handle sessions
+  /// automatically through their respective native SDKs.
+  /// Windows and Linux currently don't support sessions.
+  ///
+  /// @param ignoreDurations If true, the session will ignore the configured session duration
+  FutureOr<void> startSession({bool ignoreDuration = false});
+
+  /// Gets the current active session.
+  ///
+  /// Note: This is used on web platforms and returns null on non-web.
+  FutureOr<Map<dynamic, dynamic>?> getSession();
+
+  /// Updates the current session with the provided status and/or error count.
+  ///
+  /// Note: This is used on web platforms and is a no-op on non-web.
+  FutureOr<void> updateSession({int? errors, String? status});
+
+  /// Sends the current session immediately.
+  ///
+  /// NNote: This is used on web platforms and is a no-op on non-web.
+  FutureOr<void> captureSession();
 }

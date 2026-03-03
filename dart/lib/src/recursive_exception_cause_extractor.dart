@@ -11,13 +11,15 @@ class RecursiveExceptionCauseExtractor {
 
   final SentryOptions _options;
 
-  List<ExceptionCause> flatten(exception, stackTrace) {
+  List<ExceptionCause> flatten(dynamic exception, dynamic stackTrace) {
     final allExceptionCauses = <ExceptionCause>[];
     final circularityDetector = <dynamic>{};
 
     var currentException = exception;
-    ExceptionCause? currentExceptionCause =
-        ExceptionCause(exception, stackTrace);
+    ExceptionCause? currentExceptionCause = ExceptionCause(
+      exception,
+      stackTrace,
+    );
 
     while (currentException != null &&
         currentExceptionCause != null &&
@@ -35,7 +37,7 @@ class RecursiveExceptionCauseExtractor {
         currentExceptionCause = extractor?.cause(extractionSourceSource);
         currentException = currentExceptionCause?.exception;
       } catch (exception, stackTrace) {
-        _options.logger(
+        _options.log(
           SentryLevel.error,
           'An exception occurred while extracting  exception cause',
           exception: exception,

@@ -2,19 +2,18 @@
 
 import 'dart:async';
 
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:meta/meta.dart';
-import '../native/native_frames.dart';
-import '../native/sentry_native_binding.dart';
-import 'time_to_display_tracker.dart';
-import 'time_to_full_display_tracker.dart';
+// ignore: implementation_imports
+import 'package:sentry/src/sentry_tracer.dart';
 
 import '../../sentry_flutter.dart';
 import '../event_processor/flutter_enricher_event_processor.dart';
-
-// ignore: implementation_imports
-import 'package:sentry/src/sentry_tracer.dart';
+import '../integrations/web_session_integration.dart';
+import '../web/web_session_handler.dart';
+import 'time_to_display_tracker.dart';
 
 /// This key must be used so that the web interface displays the events nicely
 /// See https://develop.sentry.dev/sdk/event-payloads/breadcrumbs/
@@ -63,6 +62,9 @@ typedef AdditionalInfoExtractor = Map<String, dynamic>? Function(
 /// if those happen to take longer. The transaction will be set to [Scope.span]
 /// if the latter is empty.
 ///
+/// If [enableNewTraceOnNavigation] is true (default), a
+/// fresh trace is generated before each push, pop, or replace event.
+///
 /// Enabling the [setRouteNameAsTransaction] option overrides the current
 /// [Scope.transaction] which will also override the name of the current
 /// [Scope.span]. So be careful when this is used together with performance
@@ -75,6 +77,7 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
   SentryNavigatorObserver({
     Hub? hub,
     bool enableAutoTransactions = true,
+    bool enableNewTraceOnNavigation = true,
     Duration autoFinishAfter = const Duration(seconds: 3),
     bool setRouteNameAsTransaction = false,
     RouteNameExtractor? routeNameExtractor,
@@ -82,17 +85,22 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
     List<String>? ignoreRoutes,
   })  : _hub = hub ?? HubAdapter(),
         _enableAutoTransactions = enableAutoTransactions,
+        _enableNewTraceOnNavigation = enableNewTraceOnNavigation,
         _autoFinishAfter = autoFinishAfter,
         _setRouteNameAsTransaction = setRouteNameAsTransaction,
         _routeNameExtractor = routeNameExtractor,
         _additionalInfoProvider = additionalInfoProvider,
-        _ignoreRoutes = ignoreRoutes ?? [],
-        _native = SentryFlutter.native {
+        _ignoreRoutes = ignoreRoutes ?? [] {
     _isCreated = true;
     if (enableAutoTransactions) {
       _hub.options.sdk.addIntegration('UINavigationTracing');
     }
     _timeToDisplayTracker = _initializeTimeToDisplayTracker();
+    final webSessionIntegration = _hub.options.integrations
+        .whereType<WebSessionIntegration>()
+        .firstOrNull;
+    webSessionIntegration?.enable();
+    _webSessionHandler = webSessionIntegration?.webSessionHandler;
   }
 
   /// Initializes the TimeToDisplayTracker with the option to enable time to full display tracing.
@@ -107,31 +115,30 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
 
   final Hub _hub;
   final bool _enableAutoTransactions;
+  final bool _enableNewTraceOnNavigation;
   final Duration _autoFinishAfter;
   final bool _setRouteNameAsTransaction;
   final RouteNameExtractor? _routeNameExtractor;
   final AdditionalInfoExtractor? _additionalInfoProvider;
-  final SentryNativeBinding? _native;
   final List<String> _ignoreRoutes;
   TimeToDisplayTracker? _timeToDisplayTracker;
+
+  WebSessionHandler? _webSessionHandler;
+
+  @visibleForTesting
+  WebSessionHandler? get webSessionHandler => _webSessionHandler;
 
   ISentrySpan? _transaction;
 
   static String? _currentRouteName;
 
+  @internal
+  static String? get currentRouteName => _currentRouteName;
+
   static bool _isCreated = false;
 
   @internal
   static bool get isCreated => _isCreated;
-
-  @internal
-  static String? get currentRouteName => _currentRouteName;
-
-  Completer<void>? _completedDisplayTracking = Completer();
-
-  // Since didPush does not have a future, we can keep track of when the display tracking has finished
-  @visibleForTesting
-  Completer<void>? get completedDisplayTracking => _completedDisplayTracking;
 
   @override
   void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
@@ -151,12 +158,17 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
       to: route.settings,
     );
 
-    // Clearing the display tracker here is safe since didPush happens before the Widget is built
-    _timeToDisplayTracker?.clear();
+    _addWebSessions(from: previousRoute, to: route);
 
-    DateTime timestamp = _hub.options.clock();
-    _finishTimeToDisplayTracking(endTimestamp: timestamp);
-    _startTimeToDisplayTracking(route, timestamp);
+    final routeName = _getRouteName(route) ?? _currentRouteName;
+    if (routeName != null && routeName != '/') {
+      // Don't generate a new trace on initial app start / root
+      // During SentryFlutter.init a traceId is already created
+      _startNewTraceIfEnabled();
+
+      // App start TTID/TTFD is taken care of by app start integrations
+      _instrumentTimeToDisplayOnPush(routeName, route.settings.arguments);
+    }
   }
 
   @override
@@ -168,6 +180,7 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
       return;
     }
 
+    _startNewTraceIfEnabled();
     _setCurrentRouteName(newRoute);
     _setCurrentRouteNameAsTransaction(newRoute);
 
@@ -176,6 +189,8 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
       from: oldRoute?.settings,
       to: newRoute?.settings,
     );
+
+    _addWebSessions(from: oldRoute, to: newRoute);
   }
 
   @override
@@ -187,6 +202,7 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
       return;
     }
 
+    _startNewTraceIfEnabled();
     _setCurrentRouteName(previousRoute);
     _setCurrentRouteNameAsTransaction(previousRoute);
 
@@ -196,8 +212,38 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
       to: previousRoute?.settings,
     );
 
+    _addWebSessions(from: route, to: previousRoute);
+
     final timestamp = _hub.options.clock();
-    _finishTimeToDisplayTracking(endTimestamp: timestamp, clearAfter: true);
+    _finishTransaction(endTimestamp: timestamp);
+  }
+
+  void _startNewTraceIfEnabled() {
+    if (_enableNewTraceOnNavigation) {
+      _hub.generateNewTrace();
+    }
+  }
+
+  void _instrumentTimeToDisplayOnPush(String routeName, Object? arguments) {
+    if (!_enableAutoTransactions) {
+      return;
+    }
+
+    // Clearing the display tracker here is safe since didPush happens before the Widget is built
+    _timeToDisplayTracker?.clear();
+
+    DateTime timestamp = _hub.options.clock();
+    _finishTransaction(endTimestamp: timestamp);
+
+    final transactionContext = _createTransactionContext(routeName);
+    _startTransaction(timestamp, transactionContext, arguments);
+  }
+
+  void _addWebSessions({Route<dynamic>? from, Route<dynamic>? to}) async {
+    final fromName = from != null ? _getRouteName(from) : null;
+    final toName = to != null ? _getRouteName(to) : null;
+
+    await _webSessionHandler?.startSession(from: fromName, to: toName);
   }
 
   void _addBreadcrumb({
@@ -235,23 +281,23 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
     }
   }
 
-  Future<void> _startTransaction(
-      Route<dynamic>? route, DateTime startTimestamp) async {
-    String? name = _getRouteName(route);
-    final arguments = route?.settings.arguments;
-
-    if (name == null || (name == '/')) {
-      return;
-    }
-
-    final transactionContext = SentryTransactionContext(
-      name,
+  SentryTransactionContext _createTransactionContext(String routeName) {
+    return SentryTransactionContext(
+      routeName,
       SentrySpanOperations.uiLoad,
       transactionNameSource: SentryTransactionNameSource.component,
       origin: SentryTraceOrigins.autoNavigationRouteObserver,
     );
+  }
 
-    _transaction = _hub.startTransactionWithContext(
+  Future<void> _startTransaction(
+    DateTime startTimestamp,
+    SentryTransactionContext transactionContext,
+    Object? arguments,
+  ) async {
+    _timeToDisplayTracker?.transactionId = transactionContext.spanId;
+
+    final transaction = _hub.startTransactionWithContext(
       transactionContext,
       startTimestamp: startTimestamp,
       waitForChildren: true,
@@ -259,46 +305,33 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
       trimEnd: true,
       onFinish: (transaction) async {
         _transaction = null;
-        final nativeFrames =
-            await _native?.endNativeFrames(transaction.context.traceId);
-        if (nativeFrames != null) {
-          final measurements = nativeFrames.toMeasurements();
-          for (final item in measurements.entries) {
-            final measurement = item.value;
-            transaction.setMeasurement(
-              item.key,
-              measurement.value,
-              unit: measurement.unit,
-            );
-          }
-        }
       },
     );
-
     // if _enableAutoTransactions is enabled but there's no traces sample rate
-    if (_transaction is NoOpSentrySpan) {
-      _transaction = null;
+    if (transaction is NoOpSentrySpan) {
+      _timeToDisplayTracker?.transactionId = null;
       return;
     }
 
     if (arguments != null) {
-      _transaction?.setData('route_settings_arguments', arguments);
+      transaction.setData('route_settings_arguments', arguments);
     }
+
+    _transaction = transaction;
 
     await _hub.configureScope((scope) {
       scope.span ??= _transaction;
     });
 
-    await _native?.beginNativeFrames();
+    await _timeToDisplayTracker?.track(transaction);
   }
 
-  Future<void> _finishTimeToDisplayTracking(
-      {required DateTime endTimestamp, bool clearAfter = false}) async {
+  Future<void> _finishTransaction({required DateTime endTimestamp}) async {
     final transaction = _transaction;
     _transaction = null;
     try {
       _hub.configureScope((scope) {
-        if (scope.span == transaction) {
+        if (transaction != null && scope.span == transaction) {
           scope.span = null;
         }
       });
@@ -306,30 +339,16 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
       if (transaction == null || transaction.finished) {
         return;
       }
-
-      // Cancel unfinished TTID/TTFD spans, e.g this might happen if the user navigates
-      // away from the current route before TTFD or TTID is finished.
-      for (final child in (transaction as SentryTracer).children) {
-        if (child.finished) continue;
-
-        final isTTIDSpan = child.context.operation ==
-            SentrySpanOperations.uiTimeToInitialDisplay;
-        final isTTFDSpan =
-            child.context.operation == SentrySpanOperations.uiTimeToFullDisplay;
-        if (isTTIDSpan || isTTFDSpan) {
-          final finishTimestamp = isTTFDSpan
-              ? (ttidEndTimestampProvider() ?? endTimestamp)
-              : endTimestamp;
-          await child.finish(
-            endTimestamp: finishTimestamp,
-            status: SpanStatus.deadlineExceeded(),
-          );
-        }
+      if (transaction is SentryTracer) {
+        await _timeToDisplayTracker?.cancelUnfinishedSpans(
+          transaction,
+          endTimestamp,
+        );
       }
     } catch (exception, stacktrace) {
-      _hub.options.logger(
+      _hub.options.log(
         SentryLevel.error,
-        'Error while finishing time to display tracking',
+        'Error while finishing transaction',
         exception: exception,
         stackTrace: stacktrace,
       );
@@ -338,55 +357,7 @@ class SentryNavigatorObserver extends RouteObserver<PageRoute<dynamic>> {
       }
     } finally {
       await transaction?.finish(endTimestamp: endTimestamp);
-      if (clearAfter) {
-        _clear();
-      }
     }
-  }
-
-  Future<void> _startTimeToDisplayTracking(
-      Route<dynamic>? route, DateTime startTimestamp) async {
-    try {
-      final routeName = _getRouteName(route) ?? _currentRouteName;
-      if (!_enableAutoTransactions || routeName == null) {
-        return;
-      }
-
-      bool isAppStart = routeName == '/';
-      await _startTransaction(route, startTimestamp);
-
-      final transaction = _transaction;
-      if (transaction == null) {
-        return;
-      }
-
-      if (!isAppStart) {
-        await _timeToDisplayTracker?.track(
-          transaction,
-          startTimestamp: startTimestamp,
-        );
-      }
-    } catch (exception, stacktrace) {
-      _hub.options.logger(
-        SentryLevel.error,
-        'Error while tracking time to display',
-        exception: exception,
-        stackTrace: stacktrace,
-      );
-      if (_hub.options.automatedTestMode) {
-        rethrow;
-      }
-    } finally {
-      _clear();
-    }
-  }
-
-  void _clear() {
-    if (_completedDisplayTracking?.isCompleted == false) {
-      _completedDisplayTracking?.complete();
-    }
-    _completedDisplayTracking = Completer();
-    _timeToDisplayTracker?.clear();
   }
 
   bool _isRouteIgnored(Route<dynamic> route) {
@@ -456,18 +427,5 @@ class RouteObserverBreadcrumb extends Breadcrumb {
           MapEntry<String, String>(key, value.toString()));
     }
     return args.toString();
-  }
-}
-
-extension NativeFramesMeasurement on NativeFrames {
-  Map<String, SentryMeasurement> toMeasurements() {
-    final total = SentryMeasurement.totalFrames(totalFrames);
-    final slow = SentryMeasurement.slowFrames(slowFrames);
-    final frozen = SentryMeasurement.frozenFrames(frozenFrames);
-    return {
-      total.name: total,
-      slow.name: slow,
-      frozen.name: frozen,
-    };
   }
 }

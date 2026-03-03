@@ -29,7 +29,6 @@ import UIAbility from '@ohos.app.ability.UIAbility'
 import fs from '@ohos.file.fs';
 import fileio from '@ohos.fileio';
 import display from '@ohos.display';
-import util from '@ohos.util';
 
 import { SentryOhos,
   Breadcrumb,
@@ -124,7 +123,6 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
   private applicationContext: common.Context | null = null;
   private pluginRegistrationTime: number | null = null;
   private activity: UIAbility | null = null;
-  private statusMessage: string | null = "";
   static readonly sdkName: string = "sentry-ohos";
   private static readonly REPLAY_FRAME_CHANNEL: string = 'io.sentry.sessionReplay/native';
   binding: FlutterPluginBinding | null = null;
@@ -158,10 +156,17 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
   private encodingPaused: boolean = false; // Flag to pause encoding processing
 
   private normalizeReplayId(id: string): string {
-    if (!id || id.length === 0) {
-      return '';
+    // 生成32位小写十六进制：将字符的UTF-16编码累加映射为hex，保证稳定性
+    const hex: Array<string> = [];
+    let acc = 0;
+    for (let i = 0; i < id.length; i++) {
+      acc = (acc * 131 + (id.charCodeAt(i) & 0xFFFF)) >>> 0;
+      const h = (acc & 0xFF).toString(16);
+      hex.push(h.length === 1 ? ('0' + h) : h);
+      if (hex.length >= 32) break;
     }
-    return id.replace(/-/g, '').toLowerCase();
+    while (hex.length < 32) hex.push('0');
+    return hex.join('').slice(0, 32).toLowerCase();
   }
   // 缓存初始化前的未处理异常，待 SDK 初始化完成后统一上报
   private pendingUnhandledErrors: Array<Error> = [];
@@ -193,19 +198,25 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
 
   private extractSurfaceApi(moduleObj: Object | null, source: string): Object | null {
     if (!moduleObj) {
+      console.warn('[SessionReplayVideo] ' + source + ' returned null/undefined module');
       return null;
     }
     const typeDesc = typeof moduleObj;
+    console.info('[SessionReplayVideo] ' + source + ' typeof=' + typeDesc);
     if (typeDesc !== 'object') {
+      console.warn('[SessionReplayVideo] ' + source + ' returned non-object module: type=' + typeDesc);
       return null;
     }
     const keyDesc = this.describeObjectKeys(moduleObj);
+    console.info('[SessionReplayVideo] ' + source + ' keys=' + keyDesc);
     if (this.isSurfaceApiCandidate(moduleObj)) {
+      console.info('[SessionReplayVideo] ' + source + ' exposes createSurfaceFromId directly');
       return moduleObj;
     }
     const moduleRecord = moduleObj as Record<string, Object>;
     const defaultExport = moduleRecord['default'];
     if (defaultExport && typeof defaultExport === 'object' && defaultExport !== moduleObj) {
+      console.info('[SessionReplayVideo] ' + source + ' has default export candidate');
       const resolvedDefault = this.extractSurfaceApi(defaultExport as Object, source + '.default');
       if (resolvedDefault) {
         return resolvedDefault;
@@ -213,6 +224,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
     }
     const gfxExport = moduleRecord['gfxSurface'];
     if (gfxExport && typeof gfxExport === 'object' && gfxExport !== moduleObj) {
+      console.info('[SessionReplayVideo] ' + source + ' has gfxSurface property');
       const resolvedGfx = this.extractSurfaceApi(gfxExport as Object, source + '.gfxSurface');
       if (resolvedGfx) {
         return resolvedGfx;
@@ -220,11 +232,13 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
     }
     const surfaceExport = moduleRecord['Surface'];
     if (surfaceExport && typeof surfaceExport === 'object' && surfaceExport !== moduleObj) {
+      console.info('[SessionReplayVideo] ' + source + ' has Surface property');
       const resolvedSurface = this.extractSurfaceApi(surfaceExport as Object, source + '.Surface');
       if (resolvedSurface) {
         return resolvedSurface;
       }
     }
+    console.warn('[SessionReplayVideo] ' + source + ' module missing createSurfaceFromId after inspection');
     return null;
   }
 
@@ -237,6 +251,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       const g = (globalThis as GlobalThisWithGfxSurface);
       if (g.gfxSurface) {
         this.gfxSurfaceReady = true;
+        console.info('[SessionReplayVideo] gfxSurface API already available');
         return true;
       }
 
@@ -247,20 +262,24 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       try {
         const requireNapiFn = g.requireNapi;
         if (!gfxSurfaceModule && requireNapiFn && typeof requireNapiFn === 'function') {
+          console.info('[SessionReplayVideo] Attempting to load gfxSurface via requireNapi');
           const rawModule = requireNapiFn('@ohos.graphics.surface') as Object;
           gfxSurfaceModule = this.extractSurfaceApi(rawModule, 'requireNapi');
         }
       } catch (err) {
+        console.warn('[SessionReplayVideo] requireNapi load failed: ' + String(err));
       }
 
       // Method 1: Try direct require (if supported in runtime)
       try {
         const requireFunc = g.require;
         if (!gfxSurfaceModule && requireFunc && typeof requireFunc === 'function') {
+          console.info('[SessionReplayVideo] Attempting to load gfxSurface via require');
           const rawModule = requireFunc('@ohos.graphics.surface') as Object;
           gfxSurfaceModule = this.extractSurfaceApi(rawModule, 'require');
         }
       } catch (err) {
+        console.warn('[SessionReplayVideo] require load failed: ' + String(err));
       }
 
       // Method 2: Try accessing via system module loader (if available)
@@ -269,10 +288,12 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
           const systemModule = g.system;
           const loadModule = systemModule?.loadModule;
           if (loadModule && typeof loadModule === 'function') {
+            console.info('[SessionReplayVideo] Attempting to load gfxSurface via system.loadModule');
             const rawModule = loadModule('@ohos.graphics.surface') as Object;
             gfxSurfaceModule = this.extractSurfaceApi(rawModule, 'system.loadModule');
           }
         } catch (err) {
+          console.warn('[SessionReplayVideo] system.loadModule failed: ' + String(err));
         }
       }
 
@@ -282,21 +303,28 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
           const moduleCache = g.__modules__;
           const cacheGetter = moduleCache?.get;
           if (cacheGetter && typeof cacheGetter === 'function') {
+            console.info('[SessionReplayVideo] Attempting to load gfxSurface via module cache');
             const cachedModule = cacheGetter('@ohos.graphics.surface');
             if (cachedModule) {
               gfxSurfaceModule = this.extractSurfaceApi(cachedModule as Object, 'moduleCache');
             }
           }
         } catch (err) {
+          console.warn('[SessionReplayVideo] module cache load failed: ' + String(err));
         }
       }
 
       if (gfxSurfaceModule) {
         g.gfxSurface = gfxSurfaceModule;
         this.gfxSurfaceReady = true;
+        console.info('[SessionReplayVideo] gfxSurface API registered successfully');
         return true;
+      } else {
+        const loadHints = `requireNapi=${typeof g.requireNapi}, require=${typeof g.require}, system.loadModule=${typeof g.system?.loadModule}, cacheHasGet=${typeof g.__modules__?.get}`;
+        console.warn('[SessionReplayVideo] gfxSurface API not available in globalThis, video encoding will use JPEG fallback. loaders=' + loadHints);
       }
     } catch (err) {
+      console.warn('[SessionReplayVideo] gfxSurface API unavailable: ' + String(err));
     }
     return false;
   }
@@ -306,17 +334,22 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       return;
     }
     if (!this.replayServerUrl) {
+      console.warn('[SessionReplayVideo] Replay server URL not set, skip start');
       return;
     }
     const ctx = this.abilityContext;
     if (!ctx) {
       if (!this.replayWaitingForUiCtxLogged) {
+        console.warn('[SessionReplayVideo] Waiting for UIAbility context to enable video replay');
         this.replayWaitingForUiCtxLogged = true;
       }
       return;
     }
     const canEnableVideo = this.ensureGfxSurfaceRegistered();
     const enableScreenFrames = canEnableVideo;
+    if (!canEnableVideo) {
+      console.warn('[SessionReplayVideo] gfxSurface unavailable, falling back to raw Flutter frames');
+    }
     const startOptions: ReplayStartOptions = {
       context: ctx,
       serverUrl: this.replayServerUrl,
@@ -329,13 +362,17 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       startOptions.segmentMs = this.replaySegmentMs;
     }
     try {
+      console.info('[SessionReplayVideo] Starting Replay with enableScreenFrames=' + String(enableScreenFrames));
       startReplay(startOptions);
       this.replayStarted = true;
+      console.info('[SessionReplayVideo] Replay started successfully');
     } catch (err) {
+      console.error('[SessionReplayVideo] Failed to start Replay: ' + String(err));
       if (!this.replayStarted) {
         try {
           startReplay({ context: ctx, serverUrl: this.replayServerUrl } as ReplayStartOptions);
           this.replayStarted = true;
+          console.info('[SessionReplayVideo] Replay started without screen frames');
         } catch (_) {}
       }
     }
@@ -383,7 +420,8 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
         dsn: call.argument('dsn'),
         debug: this.pluginDebug,
         environment: call.argument('environment'),
-        release: call.argument('release'),
+        // release content can be replaced with your app version name
+        release: call.argument('release') ?? 'com.example.app@1.0.0+1',
         attachStacktrace: call.argument('attachStacktrace'),
         dist: call.argument('dist'),
         maxBreadcrumbs: call.argument('maxBreadcrumbs'),
@@ -454,6 +492,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
     try {
       this.lifecycleCallbackId =
         this.applicationContext?.getApplicationContext().on('abilityLifecycle', this) ?? -1;
+      console.log('Registered lifecycle callback with id:', this.lifecycleCallbackId);
     } catch (e) {
       console.error('Failed to register lifecycle callback:', JSON.stringify(e));
     }
@@ -479,13 +518,18 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
         this.replayWaitingForUiCtxLogged = false;
         try {
           updateReplayContext(ctx);
+          console.info('[SessionReplayVideo] UIAbilityContext obtained and updated');
         } catch (err) {
+          console.warn('[SessionReplayVideo] Failed to update Replay context: ' + String(err));
         }
         // Ensure gfxSurface is registered before starting replay
         this.ensureGfxSurfaceRegistered();
         this.tryStartReplay();
+      } else {
+        console.warn('[SessionReplayVideo] Failed to obtain UIAbilityContext from ability');
       }
     } catch (err) {
+      console.warn('[SessionReplayVideo] Failed to acquire UIAbility context: ' + String(err));
     }
   }
 
@@ -524,7 +568,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
     this.channel.setMethodCallHandler(this)
     // 尽早注册全局未捕获异常处理器：在 SDK init 之前也能先缓存异常
     const observer: errorManager.ErrorObserver = {
-      onUnhandledException(errorMsg: string) {
+      onUnhandledException(errorMsg) {
         try {
           const hub = Sentry.getHubIfAvailable();
           if (hub) {
@@ -586,6 +630,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
   }
 
   onMethodCall(call: MethodCall, result: MethodResult): void {
+    console.log(`onMethodCall method = ${call.method}`);
     if (call.method == "initNativeSdk") {
       this.initNativeSdk(call, result)
     } else if (call.method == "captureEnvelope") {
@@ -697,7 +742,17 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       const payload = this.materializeBatchFrame(candidate);
       if (payload) {
         this.enqueueFrameForNative(payload);
+      } else {
+        try {
+          console.warn('[REPLAY_TAG SessionReplayBridge] materializeBatchFrame failed index=' + String(i));
+        } catch (_) {}
       }
+    }
+    const batchTime = Date.now() - batchStart;
+    if (frames.length > 0 && batchTime > 30) {
+      try {
+        console.debug(`[PERF] SessionReplayBridge enqueue batch count=${frames.length} time=${batchTime}ms queue=${this.frameQueue.length}`);
+      } catch (_) {}
     }
     result.success(null);
   }
@@ -755,6 +810,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       if (!this.flutterFrameIgnoredLogged) {
         this.flutterFrameIgnoredLogged = true;
         try {
+          console.info('[SentryFlutterPlugin] Native replay is active, ignoring Flutter frames to prevent double-capture');
         } catch (_) {}
       }
       return;
@@ -796,9 +852,11 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       const ok = this.pushFramePayload(frame as Record<string, Object | null | undefined>);
       if (!ok) {
         try {
+          console.warn('[REPLAY_TAG SessionReplayBridge] frame queue drop: pushFramePayload returned false');
         } catch (_) {}
       } else {
         try {
+          console.debug(`[REPLAY_TAG SessionReplayBridge] frame queue processed=1 remaining=${this.frameQueue.length}`);
         } catch (_) {}
       }
     }
@@ -815,8 +873,6 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
     if (typeof isScrolling === 'boolean') {
       this.isScrolling = isScrolling;
       // Don't pause encoding during scrolling to match Android behavior
-      // this.encodingPaused = isScrolling;
-
       // 通知 ReplayController 更新滑动状态 (Optional, keeping it might be useful for other logic but shouldn't pause)
       try {
         setReplayScrollingState(isScrolling);
@@ -824,14 +880,12 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
 
       if (isScrolling) {
         // Don't clear queue during scrolling
-        /*
-        this.frameQueue = [];
-        this.queueProcessing = false;
-        */
         try {
+          console.debug(`[PERF] SessionReplayBridge scrolling started (no-op)`);
         } catch (_) {}
       } else {
         try {
+          console.debug(`[PERF] SessionReplayBridge scrolling ended (no-op)`);
         } catch (_) {}
         // 立即尝试处理队列，而不是延迟
         if (!this.isScrolling && !this.encodingPaused && this.frameQueue.length > 0 && !this.queueProcessing) {
@@ -865,10 +919,12 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       } as ReplayStartOptions);
       this.replayStarted = true;
       try {
+        console.info(`[PERF] SessionReplayBridge native screenshot started, interval=${intervalMs}ms`);
       } catch (_) {}
       result.success(null);
     } catch (error) {
       try {
+        console.error('[PERF] SessionReplayBridge failed to start native screenshot: ' + String(error));
       } catch (_) {}
       result.error('StartFailed', String(error), null);
     }
@@ -879,10 +935,12 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       stopReplay();
       this.replayStarted = false;
       try {
+        console.info('[PERF] SessionReplayBridge native screenshot stopped');
       } catch (_) {}
       result.success(null);
     } catch (error) {
       try {
+        console.error('[PERF] SessionReplayBridge failed to stop native screenshot: ' + String(error));
       } catch (_) {}
       result.error('StopFailed', String(error), null);
     }
@@ -897,6 +955,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       const normalizeTime = Date.now() - normalizeStart;
       if (!pixels) {
         try {
+          console.warn('[REPLAY_TAG SessionReplayBridge] normalizeFramePixels failed for type=' + this.describePixelSource(pixelsSource));
         } catch (_) {}
         return false;
       }
@@ -904,6 +963,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       const heightCandidate = payload['height'];
       if (typeof widthCandidate !== 'number' || typeof heightCandidate !== 'number') {
         try {
+          console.warn('[REPLAY_TAG SessionReplayBridge] invalid frame size: width=' + String(widthCandidate) + ' height=' + String(heightCandidate));
         } catch (_) {}
         return false;
       }
@@ -911,6 +971,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       const height = Math.floor(heightCandidate as number);
       if (!(width > 0 && height > 0)) {
         try {
+          console.warn('[REPLAY_TAG SessionReplayBridge] non-positive frame size: ' + String(width) + 'x' + String(height));
         } catch (_) {}
         return false;
       }
@@ -936,6 +997,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
           if (converted && !this.timestampNormalizationLogged) {
             this.timestampNormalizationLogged = true;
             try {
+              console.debug('[REPLAY_TAG SessionReplayBridge] normalized microsecond timestamp to milliseconds');
             } catch (_) {}
           }
         }
@@ -953,10 +1015,12 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
 
       const totalTime = Date.now() - perfStart;
       if (totalTime > 30 || normalizeTime > 20 || cloneTime > 15 || pushTime > 20) {
+        console.debug(`[PERF] SessionReplayBridge pushFramePayload: size=${width}x${height} normalize=${normalizeTime}ms clone=${cloneTime}ms push=${pushTime}ms total=${totalTime}ms`);
       }
       return true;
     } catch (err) {
       const message = (err instanceof Error && typeof err.message === 'string') ? err.message : String(err);
+      console.error('[REPLAY_TAG SessionReplayBridge] pushFrame failed: ' + message);
       return false;
     }
   }
@@ -1085,6 +1149,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
         fileio.writeSync(file.fd, buffer);
         fs.closeSync(file.fd);
       } catch (err) {
+        console.warn('[REPLAY_TAG SessionReplayBridge] dump rgba failed: ' + String(err));
       }
       const meta = new FlutterFrameMeta(width, height, stride, timestamp, pixels.length);
       try {
@@ -1093,6 +1158,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
         fileio.writeSync(jfile.fd, jsonData.buffer);
         fs.closeSync(jfile.fd);
       } catch (err) {
+        console.warn('[REPLAY_TAG SessionReplayBridge] dump meta failed: ' + String(err));
       }
       this.flutterFrameDumped = true;
     } catch (_) {}
@@ -1125,15 +1191,77 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
   }
 
   private encodeUtf8(text: string): Uint8Array {
-    return new util.TextEncoder().encodeInto(text);
+    const length = text.length;
+    const bytes: Array<number> = [];
+    for (let i = 0; i < length; i++) {
+      let code = text.charCodeAt(i);
+      if (code >= 0xD800 && code <= 0xDBFF) {
+        // High surrogate, check for following low surrogate
+        if (i + 1 < length) {
+          const next = text.charCodeAt(i + 1);
+          if (next >= 0xDC00 && next <= 0xDFFF) {
+            // Combine to code point
+            code = ((code - 0xD800) << 10) + (next - 0xDC00) + 0x10000;
+            i++;
+          }
+        }
+      }
+
+      if (code < 0x80) {
+        bytes.push(code);
+      } else if (code < 0x800) {
+        bytes.push(0xc0 | (code >> 6));
+        bytes.push(0x80 | (code & 0x3f));
+      } else if (code < 0x10000) {
+        bytes.push(0xe0 | (code >> 12));
+        bytes.push(0x80 | ((code >> 6) & 0x3f));
+        bytes.push(0x80 | (code & 0x3f));
+      } else {
+        bytes.push(0xf0 | (code >> 18));
+        bytes.push(0x80 | ((code >> 12) & 0x3f));
+        bytes.push(0x80 | ((code >> 6) & 0x3f));
+        bytes.push(0x80 | (code & 0x3f));
+      }
+    }
+    const out = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) {
+      out[i] = bytes[i];
+    }
+    return out;
   }
 
   private decodeUtf8(bytes: Uint8Array, start: number, end: number): string {
-    const slice = bytes.subarray(start, end);
-    return new util.TextDecoder().decode(slice);
+    let i = start;
+    let out = '';
+    while (i < end) {
+      let c = bytes[i++];
+      if (c < 128) {
+        out += String.fromCharCode(c);
+      } else if (c > 191 && c < 224) {
+        if (i >= end) break;
+        let c2 = bytes[i++];
+        out += String.fromCharCode(((c & 31) << 6) | (c2 & 63));
+      } else if (c > 223 && c < 240) {
+        if (i + 1 >= end) break;
+        let c2 = bytes[i++];
+        let c3 = bytes[i++];
+        out += String.fromCharCode(((c & 15) << 12) | ((c2 & 63) << 6) | (c3 & 63));
+      } else if (c > 239 && c < 248) {
+        if (i + 2 >= end) break;
+        let c2 = bytes[i++];
+        let c3 = bytes[i++];
+        let c4 = bytes[i++];
+        let cp = ((c & 7) << 18) | ((c2 & 63) << 12) | ((c3 & 63) << 6) | (c4 & 63);
+        cp -= 0x10000;
+        out += String.fromCharCode(0xD800 + (cp >> 10));
+        out += String.fromCharCode(0xDC00 + (cp & 0x3FF));
+      }
+    }
+    return out;
   }
 
   async captureEnvelope(call: MethodCall, result: MethodResult): Promise<void> {
+    console.info('[SentryTrace] SentryFlutterPlugin: captureEnvelope called');
     type CaptureEnvelopeListArgs = [Uint8Array | ArrayBuffer | number[], boolean];
     try {
       // Flutter 层按数组传参：[bytes, containsUnhandled]
@@ -1160,7 +1288,123 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
         return;
       }
 
-// SentryDump removed
+      // Debug snapshot: dump envelope head and first 32 bytes of the first PNG attachment (only when debug=true)
+      if (this.pluginDebug) try {
+        const dumpDir: string = '/data/storage/el2/base/haps/entry/files/sentry';
+        try {
+          const st = fs.statSync(dumpDir);
+          if (!st.isDirectory()) { fs.mkdirSync(dumpDir); console.info('[SentryDump] mkdir dumpDir (not dir) ' + dumpDir); }
+        } catch (e) {
+          try { fs.mkdirSync(dumpDir); console.info('[SentryDump] mkdir dumpDir ' + dumpDir); } catch (e2) { console.error('[SentryDump] mkdir failed ' + (e2?.message || '')); }
+        }
+        const ts = Date.now();
+
+        const toHex = (u8: Uint8Array): string => {
+          const hex: Array<string> = [];
+          const n = Math.min(32, u8.byteLength);
+          for (let i = 0; i < n; i++) {
+            const v = u8[i] & 0xFF;
+            const h = v.toString(16).toUpperCase();
+            hex.push((h.length === 1 ? '0' + h : h));
+          }
+          return hex.join(' ');
+        };
+
+        const readLineEnd = (buf: Uint8Array, start: number): number => {
+          const len = buf.byteLength;
+          let i = start;
+          while (i < len) {
+            if (buf[i] === 0x0A) return i; // LF
+            i++;
+          }
+          return -1;
+        };
+
+        const decodeAscii = (buf: Uint8Array, s: number, e: number): string => {
+          // decode [s, e) bytes as ASCII/UTF-8-safe for JSON headers
+          let out = '';
+          for (let i = s; i < e; i++) {
+            out += String.fromCharCode(buf[i] & 0xFF);
+          }
+          return out;
+        };
+
+        const envHeadHex = toHex(data.subarray(0, Math.min(32, data.length)));
+        console.info('[SentryDump] envelope bytes=' + String(data.length) + ' head32.len=' + String(envHeadHex.length));
+
+        // Try to locate the first image/png attachment body and dump its first 32 bytes
+        let pngHeadHex: string = '';
+        try {
+          let pos = 0;
+          // 1) envelope header line
+          let lineEnd = readLineEnd(data, pos);
+          if (lineEnd > pos) {
+            pos = lineEnd + 1;
+          }
+          // Iterate items
+          while (pos >= 0 && pos < data.byteLength) {
+            // item header line
+            const hdrEnd = readLineEnd(data, pos);
+            if (hdrEnd < 0) break;
+            const hdrStr = decodeAscii(data, pos, hdrEnd);
+            pos = hdrEnd + 1;
+            let item: Record<string, ESObject> | null = null;
+            try { item = JSON.parse(hdrStr) as Record<string, ESObject>; } catch (_) { break; }
+            if (!item) break;
+            const typeVal = (item as Record<string, ESObject>)['type'] as string | undefined;
+            let lengthVal = (item as Record<string, ESObject>)['length'] as number | undefined;
+            let contentType = ((item as Record<string, ESObject>)['content_type'] as string | undefined) || ((item as Record<string, ESObject>)['contentType'] as string | undefined);
+            // Attachments may put filename/content_type in next meta line; handle both styles
+            if (typeVal === 'attachment' && (!contentType || contentType.length === 0)) {
+              const metaEnd = readLineEnd(data, pos);
+              if (metaEnd > pos) {
+                const metaStr = decodeAscii(data, pos, metaEnd);
+                pos = metaEnd + 1;
+                try {
+                  const metaObj = JSON.parse(metaStr) as Record<string, ESObject>;
+                  if (!contentType) contentType = (metaObj['content_type'] as string) || (metaObj['contentType'] as string);
+                  if (lengthVal === undefined) lengthVal = metaObj['length'] as number | undefined;
+                } catch (_) {
+                  // meta not JSON, treat as payload start
+                }
+              }
+            }
+            // Determine payload start and skip logic
+            const len = typeof lengthVal === 'number' && lengthVal > 0 ? Math.floor(lengthVal) : 0;
+            if (typeVal === 'attachment' && contentType === 'image/png') {
+              const start = pos;
+              const slice = data.subarray(start, Math.min(start + 32, data.byteLength));
+              pngHeadHex = toHex(slice);
+              // Do not advance pos further; dump only
+              break;
+            }
+            // Skip payload (and trailing LF) for non-target items
+            pos = pos + len;
+            if (pos < data.byteLength && data[pos] === 0x0A) pos += 1;
+          }
+        } catch (e) { console.error('[SentryDump] parse envelope failed ' + (e?.message || '')); }
+
+        const name = `${dumpDir}/cap_env_head_${ts}.txt`;
+        try {
+          const lines: Array<string> = [];
+          lines.push(`envelope_first32: ${envHeadHex}`);
+          lines.push(`png_first32: ${pngHeadHex || 'not_found'}`);
+          const content = lines.join('\n');
+          // create if not exists
+          const O_CREAT = 0o100;
+          // truncate
+          const O_TRUNC = 0o1000;
+          // write only
+          const O_WRONLY = 0o1;
+          console.info('[SentryDump] open ' + name);
+          const fd = fileio.openSync(name, O_CREAT | O_TRUNC | O_WRONLY, 0o666);
+          const written = fileio.writeSync(fd, content);
+          console.info('[SentryDump] written=' + String(typeof written === 'number' ? written : 0));
+          try { fileio.closeSync(fd); } catch (e3) { console.error('[SentryDump] close failed ' + (e3?.message || '')); }
+        } catch (e) {
+          console.error('[SentryDump] write failed ' + (e?.message || ''));
+        }
+      } catch (_) {}
 
       try {
         const toSend = this.enableEnvelopeInject ? this.injectReplayIntoEnvelope(data) : data;
@@ -1176,6 +1420,13 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
     }
   }
 
+  private formatUuid(id: string): string {
+    if (typeof id === 'string' && id.length === 32) {
+       return id.substring(0, 8) + '-' + id.substring(8, 12) + '-' + id.substring(12, 16) + '-' + id.substring(16, 20) + '-' + id.substring(20);
+    }
+    return id;
+  }
+
   // 将原始 envelope 二进制中 type=event 的条目 payload 注入 tags.replayId 与 contexts.replay
   private injectReplayIntoEnvelope(src: Uint8Array): Uint8Array {
     try {
@@ -1183,8 +1434,8 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       // Use ridRaw directly to match the ID sent by ReplayController
       if (typeof ridRaw !== 'string' || ridRaw.length === 0) return src;
 
-      // Ensure standard 32-char hex format (no hyphens) to match Replay Envelope
-      const rid = this.normalizeReplayId(ridRaw);
+      // Format as UUID (with hyphens) for Sentry linking compatibility
+      const rid = this.formatUuid(ridRaw);
 
       const LF = 0x0A;
       const parts: Array<Uint8Array> = [];
@@ -1212,12 +1463,10 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
         const newEnvHeaderStr = JSON.stringify(envHeader);
         parts.push(this.encodeUtf8(newEnvHeaderStr));
         parts.push(new Uint8Array([LF]));
-        try {
-        } catch (_) {}
+        try { console.info('[SentryFlutterPlugin] Injected replay_id=' + rid + ' into envelope header'); } catch (_) {}
       } catch (e) {
         // Fallback: use original header if parsing fails
-        try {
-        } catch (_) {}
+        try { console.warn('[SentryFlutterPlugin] Failed to inject replay_id into envelope header: ' + e); } catch (_) {}
         parts.push(src.subarray(0, envEnd + 1));
       }
 
@@ -1309,10 +1558,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       let total = 0; for (let i = 0; i < parts.length; i++) total += parts[i].length;
       const out = new Uint8Array(total); let off = 0;
       for (let i = 0; i < parts.length; i++) { out.set(parts[i], off); off += parts[i].length; }
-      try {
-        if (injected) {
-        }
-      } catch (_) {}
+      try { if (injected) console.info('[replay][envelope] injected rid into event item'); } catch (_) {}
       return out;
     } catch (_) { return src; }
   }
@@ -1326,6 +1572,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
         return;
       }
       try {
+        console.log('captureEnvelopeFromPath path=' + path);
         const stat = fs.statSync(path);
         const size = (stat.size as number) || 0;
         if (size <= 0) {
@@ -1412,6 +1659,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       Sentry.setContext(key, value);
       try { result.success(""); } catch (_) {}
     } catch (err) {
+      console.error('[SentryFlutterPlugin] setContexts err:',err?.message);
     }
   }
 
@@ -1424,12 +1672,14 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       Sentry.removeContext(key);
       try { result.success(""); } catch (_) {}
     } catch (err) {
+      console.error('[SentryFlutterPlugin] removeContexts err:',err?.message);
     }
   }
 
   setUser(user: Map<string, ESObject> | null, result: MethodResult): void {
     try {
       if (user == null) {
+        console.error('user is null');
         result.error(Error_Code, Message, Details);
         return;
       };
@@ -1441,6 +1691,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       Sentry.setUser(u);
       try { result.success(""); } catch (_) {}
     } catch (err) {
+      console.error('[SentryFlutterPlugin] setUser err:',err?.message);
     }
   }
 
@@ -1460,6 +1711,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       Sentry.addBreadcrumb(b);
       try { result.success(""); } catch (_) {}
     } catch (err) {
+      console.error('[SentryFlutterPlugin] addBreadcrumb err:',err?.message)
     }
   }
 
@@ -1468,6 +1720,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       Sentry.clearBreadcrumbs();
       try { result.success(""); } catch (_) {}
     } catch (err) {
+      console.error('[SentryFlutterPlugin] clearBreadcrumbs err:',err?.message);
     }
   }
 
@@ -1480,6 +1733,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       Sentry.setExtra(key, value);
       try { result.success(""); } catch (_) {}
     } catch (err) {
+      console.error('[SentryFlutterPlugin] setExtra err:',err?.message)
     }
   }
 
@@ -1492,6 +1746,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       Sentry.removeExtra(key);
       try { result.success(""); } catch (_) {}
     } catch (err) {
+      console.error('[SentryFlutterPlugin] removeExtra err:',err?.message)
     }
   }
 
@@ -1504,6 +1759,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       Sentry.setTag(key, value);
       try { result.success(""); } catch (_) {}
     } catch (err) {
+      console.error('[SentryFlutterPlugin] setTag err:',err?.message)
     }
   }
 
@@ -1516,6 +1772,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       Sentry.removeTag(key);
       try { result.success(""); } catch (_) {}
     } catch (err) {
+      console.error('[SentryFlutterPlugin] removeTag err:',err?.message)
     }
   }
 
@@ -1654,6 +1911,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
 
       result.success(out as Object);
     } catch (err) {
+      console.error('[SentryFlutterPlugin] loadContexts err:', err?.message);
       // 即便异常也返回空，避免阻塞
       result.success({});
     }
@@ -1700,7 +1958,7 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       const width = call.argument('width') as number | null;
       const height = call.argument('height') as number | null;
       const frameRate = call.argument('frameRate') as number | null;
-      // const bitRate = call.argument('bitRate') as number | null; // OHOS 端未使用视频编码，忽略
+      // OHOS 端未使用bitRate视频编码，忽略
 
       // 仅在启用了 Replay 时应用配置
       if (this.replayEnabled) {

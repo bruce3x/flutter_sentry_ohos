@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/mockito.dart';
 import 'package:sentry/sentry.dart';
 import 'package:sentry_flutter/src/integrations/on_error_integration.dart';
+import 'package:sentry_flutter/src/utils/platform_dispatcher_wrapper.dart';
 
 import '../mocks.dart';
 import '../mocks.mocks.dart';
@@ -21,12 +22,15 @@ void main() {
       required Object exception,
       required StackTrace stackTrace,
       ErrorCallback? handler,
-      bool onErrorReturnValue = true,
+      bool? onErrorReturnValue = true,
     }) {
-      fixture.platformDispatcherWrapper.onError = handler ??
-          (_, __) {
-            return onErrorReturnValue;
-          };
+      ErrorCallback? fallbackOnError;
+      if (onErrorReturnValue != null) {
+        fallbackOnError = (_, __) {
+          return onErrorReturnValue;
+        };
+      }
+      fixture.platformDispatcherWrapper.onError = handler ?? fallbackOnError;
 
       when(fixture.hub.captureEvent(
         captureAny,
@@ -90,6 +94,23 @@ void main() {
         exception: exception,
         stackTrace: StackTrace.current,
         onErrorReturnValue: false,
+      );
+
+      final event = verify(
+        await fixture.hub.captureEvent(captureAny,
+            stackTrace: captureAnyNamed('stackTrace')),
+      ).captured.first as SentryEvent;
+
+      final throwableMechanism = event.throwableMechanism as ThrowableMechanism;
+      expect(throwableMechanism.mechanism.handled, false);
+    });
+
+    test('handled is false if onError is null', () async {
+      final exception = StateError('error');
+      _reportError(
+        exception: exception,
+        stackTrace: StackTrace.current,
+        onErrorReturnValue: null,
       );
 
       final event = verify(

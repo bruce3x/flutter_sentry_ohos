@@ -15,7 +15,6 @@
 
 import common from '@ohos.app.ability.common';
 import { startReplay, stopReplay, updateReplayContext, captureReplayOnError, getReplayId, configureReplaySampling } from './api';
-import { replayInfo } from './ReplayLogger';
 
 export interface ReplayIntegrationOptions {
   serverUrl?: string;

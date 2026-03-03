@@ -72,3 +72,5 @@ export function registerOnAppear(pageThis: ESObject, ...items: UIComponent[]): v
 export function unregisterOnDisappear(...items: UIComponent[]): void {
   items.forEach((it: UIComponent) => unreg(it));
 }
+
+

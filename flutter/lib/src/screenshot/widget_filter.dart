@@ -9,7 +9,7 @@ import 'masking_config.dart';
 @internal
 class WidgetFilter {
   final items = <WidgetFilterItem>[];
-  final SentryLogger logger;
+  final SdkLogCallback logger;
   final SentryMaskingConfig config;
   late WidgetFilterColorScheme _scheme;
   late RenderObject _root;
@@ -80,7 +80,7 @@ class WidgetFilter {
         break;
       case SentryMaskingDecision.continueProcessing:
         // If this element should not be obscured, visit and check its children.
-        element.visitChildElements(_visitList.add);
+        element.debugVisitOnstageChildren(_visitList.add);
         break;
     }
   }

@@ -9,15 +9,15 @@ var _instanceCounter = 0;
 
 @internal
 class ReplayScreenshotRecorder extends ScreenshotRecorder {
-  ReplayScreenshotRecorder(super.config, super.options)
+  ReplayScreenshotRecorder(super.options)
       : super(
-            privacyOptions: options.experimental.privacyForReplay,
+            privacyOptions: options.privacy,
             logName: 'ReplayRecorder #${++_instanceCounter}');
 
   @override
   @protected
-  Future<void> executeTask(void Function() task, Flow flow) {
-    // Future() schedules the task to be executed asynchronously with TImer.run.
+  Future<void> executeTask(Future<void> Function() task, Flow flow) {
+    // Future() schedules the task to be executed asynchronously with Timer.run.
     return Future(task);
   }
 }

@@ -6,6 +6,7 @@ import '../native/sentry_native_binding.dart';
 
 // ignore: implementation_imports
 import 'package:sentry/src/sentry_tracer.dart';
+import 'dart:async';
 
 /// Handles communication with native frameworks in order to enrich
 /// root [SentryTransaction] with app start data for mobile vitals.
@@ -20,8 +21,12 @@ class NativeAppStartHandler {
   /// We filter out App starts more than 60s
   static const _maxAppStartMillis = 60000;
 
-  Future<void> call(Hub hub, SentryFlutterOptions options,
-      {required DateTime appStartEnd}) async {
+  Future<void> call(
+    Hub hub,
+    SentryFlutterOptions options, {
+    required SentryTransactionContext context,
+    required DateTime appStartEnd,
+  }) async {
     _hub = hub;
     _options = options;
 
@@ -36,34 +41,33 @@ class NativeAppStartHandler {
 
     // Create Transaction & Span
 
-    const screenName = 'root /';
-    final transaction = _hub.startTransaction(
-      screenName,
-      SentrySpanOperations.uiLoad,
+    final rootScreenTransaction = _hub.startTransactionWithContext(
+      context,
       startTimestamp: appStartInfo.start,
-    );
-
-    await options.timeToDisplayTracker.track(
-      transaction,
-      startTimestamp: appStartInfo.start,
-      endTimestamp: appStartInfo.end,
-      origin: SentryTraceOrigins.autoUiTimeToDisplay,
+      waitForChildren: true,
+      autoFinishAfter: Duration(seconds: 3),
+      bindToScope: true,
+      trimEnd: true,
     );
 
     SentryTracer sentryTracer;
-    if (transaction is SentryTracer) {
-      sentryTracer = transaction;
+    if (rootScreenTransaction is SentryTracer) {
+      sentryTracer = rootScreenTransaction;
     } else {
       return;
     }
 
-    // Enrich Transaction
+    // We need to add the measurements before we add the child spans
+    // If the child span finish the transaction will finish and then we cannot add measurements
+    // TODO(buenaflor): eventually we can move this to the onFinish callback
     SentryMeasurement? measurement = appStartInfo.toMeasurement();
     sentryTracer.measurements[measurement.name] = appStartInfo.toMeasurement();
-    await _attachAppStartSpans(appStartInfo, sentryTracer);
 
-    // Finish Transaction
-    await transaction.finish(endTimestamp: appStartInfo.end);
+    await options.timeToDisplayTracker.track(
+      rootScreenTransaction,
+      ttidEndTimestamp: appStartInfo.end,
+    );
+    await _attachAppStartSpans(appStartInfo, sentryTracer);
   }
 
   _AppStartInfo? _infoNativeAppStart(
@@ -106,7 +110,7 @@ class NativeAppStartHandler {
           description: entry.key as String,
         ));
       } catch (e) {
-        _options.logger(
+        _options.log(
             SentryLevel.warning, 'Failed to parse native span times: $e');
         continue;
       }
@@ -201,7 +205,7 @@ class NativeAppStartHandler {
         span.data.putIfAbsent('native', () => true);
         transaction.children.add(span);
       } catch (e) {
-        _options.logger(SentryLevel.warning,
+        _options.log(SentryLevel.warning,
             'Failed to attach native span to app start transaction: $e');
       }
     });

@@ -1,0 +1,8 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "sentry_firebase_remote_config"
+    }
+  ]
+}

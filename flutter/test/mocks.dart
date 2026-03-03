@@ -3,25 +3,39 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/src/widgets/binding.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:meta/meta.dart';
 import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
 import 'package:sentry/src/platform/platform.dart';
 import 'package:sentry/src/sentry_tracer.dart';
-
-import 'package:meta/meta.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 import 'package:sentry_flutter/src/frames_tracking/sentry_delayed_frames_tracker.dart';
-import 'package:sentry_flutter/src/renderer/renderer.dart';
+import 'package:sentry_flutter/src/navigation/time_to_display_tracker.dart';
+import 'package:sentry_flutter/src/navigation/time_to_initial_display_tracker.dart';
+import 'package:sentry_flutter/src/navigation/time_to_full_display_tracker.dart';
 import 'package:sentry_flutter/src/native/sentry_native_binding.dart';
+import 'package:sentry_flutter/src/renderer/renderer.dart';
+import 'package:sentry_flutter/src/web/sentry_js_binding.dart';
 
 import 'mocks.mocks.dart';
 import 'no_such_method_provider.dart';
 
 const fakeDsn = 'https://abc@def.ingest.sentry.io/1234567';
 const fakeProguardUuid = '3457d982-65ef-576d-a6ad-65b5f30f49a5';
+final _firstFrame =
+    '''Error at chrome-extension://aeblfdkhhhdcdjpifhhbdiojplfjncoa/inline/injected/webauthn-listeners.js:2:127
+  at chrome-extension://aeblfdkhhhdcdjpifhhbdiojplfjncoa/inline/injected/webauthn-listeners.js:2:260
+''';
+final _secondFrame = '''Error at http://127.0.0.1:8080/main.dart.js:2:169
+  at http://127.0.0.1:8080/main.dart.js:2:304''';
+// We wanna assert that the second frame is the correct debug id match
+final debugIdMap = {_firstFrame: 'whatever debug id', _secondFrame: debugId};
+final debugId = '82cc8a97-04c5-5e1e-b98d-bb3e647208e6';
 
-SentryFlutterOptions defaultTestOptions([PlatformChecker? checker]) {
-  return SentryFlutterOptions(dsn: fakeDsn, checker: checker)
+SentryFlutterOptions defaultTestOptions(
+    {Platform? platform, RuntimeChecker? checker}) {
+  return SentryFlutterOptions(
+      dsn: fakeDsn, platform: platform, checker: checker)
     ..automatedTestMode = true;
 }
 
@@ -53,87 +67,48 @@ ISentrySpan startTransactionShim(
   SentryDelayedFramesTracker,
   BindingWrapper,
   WidgetsFlutterBinding,
+  SentryJsBinding,
+  TimeToDisplayTracker,
+  TimeToInitialDisplayTracker,
+  TimeToFullDisplayTracker,
 ], customMocks: [
   MockSpec<Hub>(fallbackGenerators: {#startTransaction: startTransactionShim})
 ])
 void main() {}
 
-class MockPlatform with NoSuchMethodProvider implements Platform {
-  const MockPlatform(this.operatingSystem,
-      {this.operatingSystemVersion = '', this.localHostname = ''});
-
-  const MockPlatform.android() : this('android');
-  const MockPlatform.iOs() : this('ios');
-  const MockPlatform.macOs() : this('macos');
-  const MockPlatform.windows() : this('windows');
-  const MockPlatform.linux() : this('linux');
-  const MockPlatform.fuchsia() : this('fuchsia');
-
-  @override
-  final String operatingSystem;
-
-  @override
-  final String operatingSystemVersion;
-
-  @override
-  final String localHostname;
-
-  @override
-  bool get isLinux => (operatingSystem == 'linux');
-
-  @override
-  bool get isMacOS => (operatingSystem == 'macos');
-
-  @override
-  bool get isWindows => (operatingSystem == 'windows');
-
-  @override
-  bool get isAndroid => (operatingSystem == 'android');
-
-  @override
-  bool get isIOS => (operatingSystem == 'ios');
-
-  @override
-  bool get isFuchsia => (operatingSystem == 'fuchsia');
-}
-
-class MockPlatformChecker with NoSuchMethodProvider implements PlatformChecker {
-  MockPlatformChecker({
-    this.buildMode = MockPlatformCheckerBuildMode.debug,
-    this.isWebValue = false,
-    this.hasNativeIntegration = false,
+class MockRuntimeChecker with NoSuchMethodProvider implements RuntimeChecker {
+  MockRuntimeChecker({
+    this.buildMode = MockRuntimeCheckerBuildMode.debug,
+    this.isObfuscated = false,
+    this.isSplitDebugInfo = false,
     this.isRoot = true,
-    Platform? mockPlatform,
-  }) : _mockPlatform = mockPlatform ?? MockPlatform('');
+  });
 
-  final MockPlatformCheckerBuildMode buildMode;
-  final bool isWebValue;
+  final MockRuntimeCheckerBuildMode buildMode;
+  final bool isObfuscated;
+  final bool isSplitDebugInfo;
   final bool isRoot;
-  final Platform _mockPlatform;
 
   @override
-  bool hasNativeIntegration = false;
+  bool isDebugMode() => buildMode == MockRuntimeCheckerBuildMode.debug;
 
   @override
-  bool isDebugMode() => buildMode == MockPlatformCheckerBuildMode.debug;
+  bool isProfileMode() => buildMode == MockRuntimeCheckerBuildMode.profile;
 
   @override
-  bool isProfileMode() => buildMode == MockPlatformCheckerBuildMode.profile;
+  bool isReleaseMode() => buildMode == MockRuntimeCheckerBuildMode.release;
 
   @override
-  bool isReleaseMode() => buildMode == MockPlatformCheckerBuildMode.release;
+  bool isAppObfuscated() => isObfuscated;
+
+  @override
+  bool isSplitDebugInfoBuild() => isSplitDebugInfo;
 
   @override
   bool get isRootZone => isRoot;
-
-  @override
-  bool get isWeb => isWebValue;
-
-  @override
-  Platform get platform => _mockPlatform;
 }
 
-enum MockPlatformCheckerBuildMode { debug, profile, release }
+enum MockRuntimeCheckerBuildMode { debug, profile, release }
 
 // Does nothing or returns default values.
 // Useful for when a Hub needs to be passed but is not used.
@@ -154,9 +129,7 @@ class MockRendererWrapper implements RendererWrapper {
   final FlutterRenderer? _renderer;
 
   @override
-  FlutterRenderer? getRenderer() {
-    return _renderer;
-  }
+  FlutterRenderer? get renderer => _renderer;
 }
 
 class TestBindingWrapper implements BindingWrapper {
@@ -202,10 +175,11 @@ class NativeChannelFixture {
       handler;
   static TestDefaultBinaryMessenger get _messenger =>
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+  late final codec = StandardMethodCodec();
 
   NativeChannelFixture() {
     TestWidgetsFlutterBinding.ensureInitialized();
-    channel = MethodChannel('test.channel', StandardMethodCodec(), _messenger);
+    channel = MethodChannel('test.channel', codec, _messenger);
     handler = MockCallbacks().methodCallHandler;
     when(handler('initNativeSdk', any)).thenAnswer((_) => Future.value());
     when(handler('closeNativeSdk', any)).thenAnswer((_) => Future.value());
@@ -214,11 +188,15 @@ class NativeChannelFixture {
   }
 
   // Mock this call as if it was invoked by the native side.
-  Future<ByteData?> invokeFromNative(String method, [dynamic arguments]) async {
-    final call =
-        StandardMethodCodec().encodeMethodCall(MethodCall(method, arguments));
-    return _messenger.handlePlatformMessage(
+  Future<dynamic> invokeFromNative(String method, [dynamic arguments]) async {
+    final call = codec.encodeMethodCall(MethodCall(method, arguments));
+    final byteData = await _messenger.handlePlatformMessage(
         channel.name, call, (ByteData? data) {});
+    if (byteData != null) {
+      return codec.decodeEnvelope(byteData);
+    } else {
+      return null;
+    }
   }
 }
 
