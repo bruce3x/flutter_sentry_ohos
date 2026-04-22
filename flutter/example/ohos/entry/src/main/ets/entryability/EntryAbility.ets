@@ -37,7 +37,9 @@ export default class EntryAbility extends FlutterAbility {
   private static readonly UI_CONTEXT_RETRY_BASE_DELAY_MS: number = 150;
   private nativeChannel: MethodChannel | null = null;
   private outboxPath: string = "";
-  private SENTRY_DSN: string = 'https://377c5438bf2f705c43b49e8a5d99a0af@o4510441206251520.ingest.us.sentry.io/4510441208741888';
+  // Keep this in sync with `exampleDsn` in example/lib/main.dart so that
+  // NDK events are reported to the same project as Flutter/sentry_ohos.
+  private SENTRY_DSN: string = 'https://56ab32d4c7be305792d090acf13820ec@o4511119627386880.ingest.de.sentry.io/4511119629025360';
 
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -202,6 +204,20 @@ export default class EntryAbility extends FlutterAbility {
 
   addEventHub() {
 
+    // ============================================================================
+    // TEST_ONLY / EXAMPLE_ONLY —— 以下事件处理仅用于 example 工程验证 Sentry 捕获路径，
+    // 切勿拷贝到生产业务代码中使用。
+    //
+    // 设计意图：'throw' / 'platform_exception' 故意使用 setTimeout 将异常抛到独立的
+    // 宏任务中，目的是绕过 emitter 回调外层的 try-catch，产生真正的未处理异常，
+    // 以便验证 errorManager 与 installGlobalErrorHandler 之间的去重逻辑
+    // （参见 SentryFlutterPlugin.ets 中的 nativeSdkState 处理）。
+    //
+    // 已知副作用：这会改变异常捕获上下文——外层同步 try-catch 捕获不到 setTimeout
+    // 内部抛出的异常，调用栈也会丢失原始宿主帧，调试体验较差。
+    // 因此：仅限测试触发点使用；正式业务代码若要主动上报，请走 Sentry.captureException。
+    // ============================================================================
+    // EXAMPLE_ONLY: 触发未处理异常以验证去重上报
     emitter.on('throw',(_) => {
       setTimeout(() => {
         throw new Error("Catch this exception thrown from HarmonyOS async task!");
@@ -212,8 +228,9 @@ export default class EntryAbility extends FlutterAbility {
       NdkSample.crash();
     })
 
+    // EXAMPLE_ONLY: 同上，模拟平台侧未处理异常
     emitter.on('platform_exception',(_) => {
-      throw new Error('Catch this platform exception!');
+      setTimeout(() => { throw new Error('Catch this platform exception!'); }, 0);
     })
   }
 
@@ -317,6 +334,7 @@ export default class EntryAbility extends FlutterAbility {
           result.success('');
         } else if (call.method == 'platform_exception') {
           emitter.emit('platform_exception');
+          result.success('');
         } else if (call.method == 'cpp_capture_message') {
           NdkSample.message();
           result.success('');

@@ -171,6 +171,18 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
   // 缓存初始化前的未处理异常，待 SDK 初始化完成后统一上报
   private pendingUnhandledErrors: Array<Error> = [];
   private errorManagerId: number = 0;
+  // 原生 SDK 初始化生命周期状态，替代单一布尔标志，使状态语义更明确：
+  //  - 'uninitialized': 从未调用过 init（或 init 失败后回退）
+  //  - 'initializing' : 正在执行 SentryOhos.init(...)
+  //  - 'initialized'  : installGlobalErrorHandler 已激活，errorManager 不再重复上报
+  // 尽管 ArkTS 单线程模型通常保证同一宏任务内读写顺序，
+  // 但使用枚举字符串能在多 async 任务交错时提供更清晰的意图表达。
+  private nativeSdkState: 'uninitialized' | 'initializing' | 'initialized' = 'uninitialized';
+  // 保留旧 getter 语义：只有当已完成初始化时才视为“native 已就绪”，
+  // 用于 onUnhandledException 中的重复上报判定。
+  private get nativeSdkInitialized(): boolean {
+    return this.nativeSdkState === 'initialized';
+  }
   // ArkTS helper: check non-empty object safely
   private isNonEmptyRecord(o: Object | null | undefined): boolean {
     if (!o || typeof o !== 'object') return false;
@@ -416,7 +428,9 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
       this.replaySessionSampleRate = sessionSampleRate;
       this.replayOnErrorSampleRate = onErrorSampleRate;
       this.replayStartRequested = this.replayEnabled;
-      SentryOhos.init({
+      this.nativeSdkState = 'initializing';
+      try {
+        SentryOhos.init({
         dsn: call.argument('dsn'),
         debug: this.pluginDebug,
         environment: call.argument('environment'),
@@ -442,7 +456,16 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
         enableHttpTracing: captureFailedRequests,
         httpConnectTimeoutMs: connectTimeoutMs ?? undefined,
         httpReadTimeoutMs: readTimeoutMs ?? undefined,
-      });
+        });
+        this.nativeSdkState = 'initialized';
+      } catch (initErr) {
+        // init 抛异常时将状态回退为 'uninitialized'，避免状态机卡在 'initializing'
+        // 导致 onUnhandledException 的 nativeSdkInitialized 判断始终为 false 而丢失去重能力，
+        // 也避免误以为原生侧已准备好而吞掉后续可补偿的异常。
+        this.nativeSdkState = 'uninitialized';
+        console.error('[Sentry] SentryOhos.init failed: ' + String(initErr));
+        throw initErr as Error;
+      }
       // 自动会话：启动即开始 session（与 Android Auto Session Tracking 对齐）
       try {
         if (this.autoSessionEnabled) {
@@ -566,13 +589,25 @@ export default class SentryFlutterPlugin extends AbilityLifecycleCallback implem
     this.applicationContext = binding.getApplicationContext()
     this.abilityContextProvider = this.applicationContext;
     this.channel.setMethodCallHandler(this)
-    // 尽早注册全局未捕获异常处理器：在 SDK init 之前也能先缓存异常
+    // 尽早注册全局未捕获异常处理器：在 SDK init 之前也能先缓存异常。
+    // 生命周期说明：observer 通过闭包捕获 `pluginSelf`（= 当前 Plugin 实例）访问
+    // `nativeSdkState`，其生命周期与 Plugin 实例绑定——已通过 `this.errorManagerId`
+    // 在 `onAbilityDestroy()` 中调用 `errorManager.off('error', this.errorManagerId)`
+    // 显式反注册，确保 Plugin 销毁后 observer 不再被触发、也不会保留对已释放实例的引用。
+    // ArkTS 单线程模型下 `nativeSdkState` 的读写无需额外同步原语。
+    const pluginSelf = this;
     const observer: errorManager.ErrorObserver = {
-      onUnhandledException(errorMsg) {
+      onUnhandledException(errorMsg: string) {
         try {
+          // SentryOhos.init() 完成后 installGlobalErrorHandler 已激活，
+          // 它会通过 onerror 以更高质量（含堆栈帧、mechanism、截图）捕获同一异常。
+          // 此处跳过以避免重复上报。
+          if (pluginSelf.nativeSdkInitialized) {
+            return;
+          }
           const hub = Sentry.getHubIfAvailable();
           if (hub) {
-            hub.captureException(Error(errorMsg));
+            hub.captureException(new Error(String(errorMsg)));
           } else {
             console.warn('[Sentry] onUnhandledException received before SDK initialization: ' + String(errorMsg));
           }

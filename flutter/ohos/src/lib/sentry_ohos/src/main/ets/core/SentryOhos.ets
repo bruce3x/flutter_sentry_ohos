@@ -50,6 +50,7 @@ import { Span as SdkSpan } from '../sentry/Span';
 import { TraceManager } from './TraceManager';
 import {AutoBreadcrumbs} from '../core/AutoBreadcrumbs'
 import hiAppEvent from '@ohos.hiviewdfx.hiAppEvent';
+import { fileIo as fs } from '@kit.CoreFileKit';
 import { UserInteractionIntegration } from './UserInteractionIntegration';
 import { FramesMonitor } from './Frames';
 // HTTP 埋点封装移动至 HttpClient.ets，避免核心类过重
@@ -240,6 +241,14 @@ export class SentryOhos {
   private static _appStartIso?: string;
   private static _frames?: FramesMonitor;
   private static _lastErrorEventId?: string;
+
+  // ---- 原生崩溃日志读取 / 摘要抽取相关常量 ----
+  // 64KB：足以覆盖 Reason/Signal/Fault thread Info 首部，避免读取完整大文件导致内存压力
+  private static readonly CRASH_LOG_MAX_READ_BYTES: number = 65536;
+  // 8KB：分块转换字节为字符串时的步长，避免一次性 String.fromCharCode 参数过多
+  private static readonly CRASH_LOG_CHUNK_SIZE: number = 8192;
+  // 崩溃摘要消息最大长度，超过则截断并追加省略号
+  private static readonly CRASH_SUMMARY_MAX_LENGTH: number = 512;
 
   // 对外提供只读开关，供 HttpClient 等使用
   static isHttpBreadcrumbsEnabled(): boolean {
@@ -1659,6 +1668,165 @@ export class SentryOhos {
     } catch (_) {}
   }
 
+  /**
+   * 读取 hiAppEvent APP_CRASH 的 external_log 文件内容（首 64KB），供原生崩溃摘要抽取使用。
+   * external_log 可能是路径字符串或字符串数组，统一取第一个可访问路径。
+   * 注意：使用 @kit.CoreFileKit 的 Promise 异步 API，避免在 hiAppEvent onReceive
+   * 回调链路上执行同步阻塞 I/O（在极端场景下可能影响主线程响应性）。
+   */
+  private static async readCrashExternalLog(externalLog: string | Array<string> | undefined): Promise<string | null> {
+    if (externalLog === undefined || externalLog === null) {
+      return null;
+    }
+    let filePath = '';
+    if (typeof externalLog === 'string') {
+      filePath = externalLog;
+    } else if (Array.isArray(externalLog)) {
+      for (let i = 0; i < externalLog.length; i++) {
+        const p = externalLog[i];
+        if (typeof p === 'string' && p.length > 0) {
+          filePath = p;
+          break;
+        }
+      }
+    }
+    if (filePath.length === 0) {
+      return null;
+    }
+    let file: fs.File | null = null;
+    try {
+      const accessible = await fs.access(filePath);
+      if (!accessible) {
+        return null;
+      }
+      const stat = await fs.stat(filePath);
+      const fileSize = stat.size as number;
+      if (fileSize <= 0) {
+        return null;
+      }
+      const maxRead = SentryOhos.CRASH_LOG_MAX_READ_BYTES;
+      const readSize = fileSize > maxRead ? maxRead : fileSize;
+      file = await fs.open(filePath, fs.OpenMode.READ_ONLY);
+      const buf = new ArrayBuffer(readSize);
+      const bytesRead = await fs.read(file.fd, buf);
+      if (bytesRead <= 0) {
+        return null;
+      }
+      const arr = new Uint8Array(buf, 0, bytesRead);
+      // 使用数组 + join 替代 += 字符串累加，避免 O(n^2) 的临时字符串分配开销。
+      // 编码说明：此处按 ASCII/Latin-1 逐字节映射为字符（String.fromCharCode）。
+      // 若日志中含 UTF-8 多字节字符且恰好跨 CRASH_LOG_CHUNK_SIZE 边界，存在被拆分
+      // 为两个替换字符的理论风险；但 hiAppEvent APP_CRASH external_log 的
+      // Reason / Signal / Fault thread Info 首部仅由 ASCII 组成（符号名、十六进制
+      // 地址、线程号等），摘要提取路径对此风险不敏感，故保持当前轻量实现。
+      // 如未来需要完整 Unicode 正确性，可切换到 @ohos.util 的 TextDecoder('utf-8')。
+      const chunkSize = SentryOhos.CRASH_LOG_CHUNK_SIZE;
+      const parts: Array<string> = [];
+      for (let offset = 0; offset < arr.length; offset += chunkSize) {
+        const end = Math.min(offset + chunkSize, arr.length);
+        const chunk = arr.slice(offset, end);
+        const codes: number[] = [];
+        for (let ci = 0; ci < chunk.length; ci++) {
+          codes.push(chunk[ci]);
+        }
+        parts.push(String.fromCharCode(...codes));
+      }
+      const content = parts.join('');
+      return content.length > 0 ? content : null;
+    } catch (err) {
+      console.error(`[Sentry] SentryOhos readCrashExternalLog failed: ${err}`);
+      return null;
+    } finally {
+      // 确保文件句柄在任何分支（正常返回 / 抛异常 / 早返回）下都被关闭，避免句柄泄漏
+      if (file !== null) {
+        try {
+          await fs.close(file);
+        } catch (closeErr) {
+          console.warn(`[Sentry] SentryOhos readCrashExternalLog close failed: ${closeErr}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * 从 APP_CRASH external_log 首部提取可读摘要。
+   * OHOS 崩溃日志典型包含 `Reason:Signal:SIGSEGV(SEGV_MAPERR)@0x...` 一行。
+   * 返回 { value, signalType }：value 作为 exception.value/ev.message；
+   * signalType（如 SIGSEGV）作为 exception.type 覆盖默认的 'Error'。
+   */
+  private static extractCrashSummaryFromLog(
+      content: string | null): Record<string, string> | null {
+    if (content === null || content.length === 0) {
+      return null;
+    }
+    try {
+      const headMax = SentryOhos.CRASH_LOG_CHUNK_SIZE;
+      const head = content.length > headMax ? content.substring(0, headMax) : content;
+      const lines = head.split('\n');
+      let reasonLine = '';
+      let faultThreadLine = '';
+      for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        if (raw === undefined || raw === null) continue;
+        const line = raw.trim();
+        if (line.length === 0) continue;
+        if (reasonLine.length === 0 && line.indexOf('Reason:') === 0) {
+          reasonLine = line;
+        } else if (faultThreadLine.length === 0 &&
+            (line.indexOf('Fault thread Info:') === 0 || line.indexOf('Fault thread:') === 0)) {
+          faultThreadLine = line;
+        }
+        if (reasonLine.length > 0 && faultThreadLine.length > 0) break;
+      }
+      let signalType: string = '';
+      // 使用可选链/空值判断简化空安全检查：match 未匹配时返回 null，
+      // 直接 ?.[0] 取首个捕获组，落空时保持 signalType = ''。
+      const sigMatch = reasonLine.match(/SIG[A-Z]+/);
+      const sigHit = sigMatch?.[0];
+      if (sigHit !== undefined && sigHit.length > 0) {
+        signalType = sigHit;
+      }
+      let value = '';
+      if (reasonLine.length > 0) {
+        let v = reasonLine.substring('Reason:'.length).trim();
+        if (v.length === 0) v = reasonLine;
+        value = SentryOhos.truncateCrashSummary(v);
+      }
+      if (value.length === 0 && faultThreadLine.length > 0) {
+        // 同样应用 CRASH_SUMMARY_MAX_LENGTH 截断，避免 fallback 分支出现超长 value。
+        value = SentryOhos.truncateCrashSummary(faultThreadLine);
+      }
+      if (value.length === 0) {
+        return null;
+      }
+      const out: Record<string, string> = {};
+      out['value'] = value;
+      out['signalType'] = signalType;
+      return out;
+    } catch (err) {
+      console.error(`[Sentry] SentryOhos extractCrashSummaryFromLog failed: ${err}`);
+      return null;
+    }
+  }
+
+  /**
+   * 统一的摘要截断策略：超过 CRASH_SUMMARY_MAX_LENGTH 则截断并追加省略号。
+   * 抽出以供 reasonLine / faultThreadLine 两处 value 来源共享，避免 fallback 分支遗漏截断。
+   */
+  private static truncateCrashSummary(v: string): string {
+    const maxLen = SentryOhos.CRASH_SUMMARY_MAX_LENGTH;
+    if (v.length > maxLen) return v.substring(0, maxLen) + '...';
+    return v;
+  }
+
+  /**
+   * @internal 仅用于单元测试，暴露 extractCrashSummaryFromLog 的结果。
+   * 生产代码请勿直接调用。
+   */
+  static internalExtractCrashSummaryFromLog(content: string | null): Record<string, string> | null {
+    return SentryOhos.extractCrashSummaryFromLog(content);
+  }
+
   // ---- HiAppEvent Watcher：APP_CRASH → SentryEvent ----
   private static installHiAppWatcher(): void {
     // 简易防重入
@@ -1847,9 +2015,31 @@ export class SentryOhos {
                 const exNameV = (exObj as Record<string, Object>)['name'];
                 const exMsgV = (exObj as Record<string, Object>)['message'];
                 const exStackV = (exObj as Record<string, Object>)['stack'];
-                const exName = typeof exNameV === 'string' ? exNameV : 'Error';
-                const exMsg = typeof exMsgV === 'string' ? exMsgV : 'App crash';
+                let exName = typeof exNameV === 'string' && exNameV.length > 0 ? exNameV : 'Error';
+                let exMsg = typeof exMsgV === 'string' && exMsgV.length > 0 ? exMsgV : '';
                 const exStack = typeof exStackV === 'string' ? exStackV : undefined;
+                // 原生崩溃（SIGSEGV 等）hiAppEvent.params.exception.message 常为空串，
+                // 退回到读取 external_log 抽取 Reason/Signal 作为可读消息，避免上送空 value。
+                // 注意：下方 await 合法性由外层 watcher.onReceive 声明为 async 保证
+                // （参见 installHiAppWatcher 中 `onReceive: async (...)` 定义）。
+                if (exMsg.length === 0) {
+                  try {
+                    const crashLog = await SentryOhos.readCrashExternalLog(params.external_log);
+                    const summary = SentryOhos.extractCrashSummaryFromLog(crashLog);
+                    if (summary !== null) {
+                      exMsg = summary['value'];
+                      const sig = summary['signalType'];
+                      if (sig.length > 0 && exName === 'Error') {
+                        exName = sig;
+                      }
+                    }
+                  } catch (crashSumErr) {
+                    console.error(`[Sentry] SentryOhos extractCrashSummary failed: ${crashSumErr}`);
+                  }
+                }
+                if (exMsg.length === 0) {
+                  exMsg = 'App crash';
+                }
                 const ev = new SentryEvent(exMsg);
                 ev.level = SentryLevel.Error;
                 const mech = new Mechanism();
