@@ -31,9 +31,22 @@ import 'drift/database.dart';
 import 'isar/user.dart';
 import 'package:isar/isar.dart';
 
-// ATTENTION: Change the DSN below with your own to see the events in Sentry. Get one at sentry.io
-const String exampleDsn =
-    'https://b724fad147bf51637a47cf79e7f4b645@o4510005122039808.ingest.us.sentry.io/4510956695519232';
+// ATTENTION: This is a DEMO-ONLY DSN used for local/example runs of this Flutter
+// example app. It exists so the example runs out-of-the-box without extra setup.
+// Do NOT ship this DSN in any production build, and do NOT point real user traffic
+// at it -- events sent with this DSN land in the example's Sentry project and
+// will be ignored / purged.
+//
+// To use your own Sentry project, either:
+//   1) Replace the literal below with your own DSN from https://sentry.io, or
+//   2) Override at build/run time via --dart-define, e.g.:
+//        flutter run --dart-define=SENTRY_DSN=https://<key>@o<org>.ingest.sentry.io/<project>
+// The --dart-define value takes precedence over the literal fallback.
+const String exampleDsn = String.fromEnvironment(
+  'SENTRY_DSN',
+  defaultValue:
+      'https://56ab32d4c7be305792d090acf13820ec@o4511119627386880.ingest.de.sentry.io/4511119629025360',
+);
 
 /// This is an exampleUrl that will be used to demonstrate how http requests are captured.
 const String exampleUrl = 'https://jsonplaceholder.typicode.com/todos/';
@@ -969,23 +982,11 @@ class CocoaExample extends StatelessWidget {
 // Top-level functions are functions declared not inside a class and not inside another function
 int loop(int val) {
   var count = 0;
-  int a = 2;
-  while (count < val) {
-    int b = 2;
-    bool prime = true; // to check if found a prime
-    while (b * b <= a) {
-      if (a % b == 0) {
-        prime = false;
-        break;
-      }
-      b++;
-    }
-    if (prime) {
-      count++;
-    }
-    a++;
+  for (var i = 1; i <= val; i++) {
+    count += i;
   }
-  return a - 1;
+
+  throw StateError('from a compute isolate $count');
 }
 
 class SecondaryScaffold extends StatelessWidget {

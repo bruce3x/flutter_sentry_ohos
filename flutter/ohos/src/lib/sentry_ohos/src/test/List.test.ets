@@ -19,6 +19,7 @@ import sentryOhosOptionsTest from './SentryOhosOptionsTest';
 import httpTransportTest from './HttpTransportTest';
 import anrTest from './AnrTest';
 import sessionTest from './SessionTest';
+import sentryCrashSummaryTest from './SentryCrashSummaryTest';
 
 export default function testsuite() {
   localUnitTest();
@@ -27,4 +28,5 @@ export default function testsuite() {
   httpTransportTest();
   anrTest();
   sessionTest();
+  sentryCrashSummaryTest();
 }
