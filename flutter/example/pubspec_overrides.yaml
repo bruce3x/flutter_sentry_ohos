@@ -19,7 +19,7 @@ dependency_overrides:
     path: ../../isar
   universal_platform:
     git:
-      url: "https://gitcode.com/OpenHarmony-Flutter/fluttertpc_universal_platform.git"
+      url: "https://gitcode.com/CPF-Flutter/fluttertpc_universal_platform.git"
   # isar community fork is more stable
   isar:
     git:
