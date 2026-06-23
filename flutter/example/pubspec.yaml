@@ -27,14 +27,14 @@ dependencies:
 #  sqflite: any # This gets constrained by `sentry_sqflite`
   sqflite:
     git:
-      url: "https://gitcode.com/openharmony-sig/flutter_sqflite.git"
+      url: "https://gitcode.com/CPF-Flutter/flutter_sqflite.git"
       path: "sqflite"
   logging: any # This gets constrained by `sentry_logging`
   drift: any # This gets constrained by `sentry_drift`
   isar: any # This gets constrained by `sentry_isar`
   package_info_plus:
     git:
-      url: https://gitcode.com/openharmony-sig/flutter_plus_plugins.git
+      url: https://gitcode.com/CPF-Flutter/flutter_plus_plugins.git
       path: packages/package_info_plus/package_info_plus
 #  path_provider: ^2.0.0
   path_provider:

@@ -20,14 +20,14 @@
 dependencies:
   sentry_flutter:
     git:
-      url: https://gitcode.com/OpenHarmony-Flutter/fluttertpc_sentry-dart
+      url: https://gitcode.com/CPF-Flutter/fluttertpc_sentry-dart
       path: flutter
       ref: br_3.35
 
 dependency_overrides:
   sentry:
     git:
-      url: https://gitcode.com/OpenHarmony-Flutter/fluttertpc_sentry-dart
+      url: https://gitcode.com/CPF-Flutter/fluttertpc_sentry-dart
       path: dart
       ref: br_3.35
 
