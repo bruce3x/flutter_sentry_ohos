@@ -15,24 +15,28 @@
 #### pubspec.yaml
 
 ```yaml
-...
-
 dependencies:
   sentry_flutter:
     git:
       url: https://gitcode.com/CPF-Flutter/fluttertpc_sentry-dart
       path: flutter
-      ref: br_3.35
+      ref: TAG #根据下面框架版本选择TAG
 
 dependency_overrides:
   sentry:
     git:
       url: https://gitcode.com/CPF-Flutter/fluttertpc_sentry-dart
       path: dart
-      ref: br_3.35
-
-...
+       ref: TAG #根据下面框架版本选择TAG
 ```
+
+### TAG 版本对应表
+
+| Flutter 框架版本 | TAG                     |  分支    |
+|--------------|-------------------------|--------|
+| 3.22         | 8.12.0-ohos-1.0.0-beta.1 | master |
+| 3.27         | 9.6.0-ohos-1.0.0-beta.1 | br_3.35 |
+| 3.35         | 9.6.0-ohos-1.0.0-beta.1 | br_3.35 |
 
 执行命令
 
