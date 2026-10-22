@@ -55,7 +55,8 @@ android {
     }
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_1_8
-        languageVersion = "1.8"
+        // 不钉 languageVersion: Kotlin 2.3 起不再支持 1.8, 钉死会让宿主项目无法升级
+        // (上游 sentry_flutter 9.30 也已移除该行)
     }
 }
 
